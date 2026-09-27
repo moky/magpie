@@ -2,12 +2,6 @@
 
 这里定义 Magpie Bridge 服务端。
 
-Java 版服务器：
-    magpie-bridge/server-java/
-
-Python 版服务器：
-    magpie-bridge/server-py/
-
 ## 各模块（线程）设计
 
 正如 **Magpie Bridge Architecture** 里定义的那样：
@@ -25,30 +19,91 @@ Python 版服务器：
 	- 将实际数据包的长度与根据上面各字段计算得到的值进行比较；
 	- 不需要校验 command 具体值；
 2. **管理线程**需要检查 source bid：
-	- 如果是 0，则 command 必须是 “SYN?“，即有且只有第一次握手时；
+	- 如果是 0，则 command 必须是 “SYN?”，即有且只有第一次握手时才会出现；
 	- 否则必须跟内存记录（socket 信息）匹配，然后根据 command 值进行相应的处理和应答；
 3. **转发线程**需要检查两个 bid，只有 socket 信息匹配才会转发；
 
-### Bridge ID 生成规则
+## Bridge ID 管理
 
-bid 由高 16 位无符号整数 H 和低 16 位无符号整数 L 构成（32位无符号整数）
+bid 为一个 32 位无符号整数，实际应用中取高 16 位整数（1 ~ 32767）与低 16 位整数（0 ~ 65535）合并而成。
+
+socket 信息包括 ip 和 port 两个值，当其作为 key 查询时为 "{ip}:{port}" 的字符串。
+
+设计要求： bid 与 socket 信息一一对应。
+
+### 生成规则
+
+bid (32位无符号整数) 由高 16 位无符号整数 H 和低 16 位无符号整数 L 构成：
 
 1. 初始化内部私有变量 n（初始值为 1，最大值 32767）；
 2. 每次生成时取 H = n（然后 n 自动 +1，超过最大值后回到 1）；
-3. 每次生成时取 L = r（r 为随机数，取值范围 7 ~ 32767）；
+3. 每次生成时取 L = r（r 为随机整数，取值范围 0 ~ 65535）；
 4. 最终获得 32 位无符号整数 bid = (H << 16) | L；
-5. 检查内存中的分配表，如果 bid 冲突，则取 L = (L + r) & 0xFFFF 重试；
+5. 检查内存中的分配表，如果 bid 冲突，回到步骤 2 重试；
 6. 重试达到 M 次仍然冲突，抛异常，表示服务器已满，暂时无法分配 bid。
 
-其中常量 M = 32
+> 其中常量 M = 16
+
+### 冲突判定
+
+通过 bid 查询，如果记录不存在，或者记录中的 socket 信息相同，则无冲突；
+反之，如果记录中的 socket 信息与当前不同，且未符合回收条件，则判定为冲突。
 
 ### 内存分配表
 
-表中以 bid 为 key，数据内容包括：
+以 bid 为 key，或者 socket 信息为 key，均可查询分配记录。
+
+记录字段包括：
 
 - bid
-- socket
+- socket 信息
 - last_time （最后活跃时间）
 
 服务器每次收到数据包并检查通过之后，就会更新 last_time 为当前时间；
 注意，只有预处理线程和管理线程会更新 last_time，转发线程不需要这个动作，因为在预处理线程指派之前已经更新过了。
+
+### 分配与回收
+
+服务器收到握手请求（"SYN?" 指令）时：
+
+1. 先根据 socket 信息查询内存分配表，
+	1. 如果记录存在（socket 信息一定匹配），则更新 last_time，然后返回该记录 bid；
+2. 按前面的规则生成新 bid 并检查冲突：
+	1. 如果新 bid 不存在对应的分配记录，则创建新记录，然后返回该 bid；
+	2. 如果分配记录已存在且 socket 信息相同（小概率），则按 1.1. 重用该记录；
+	3. 如果存在 bid 相同但 socket 信息不同的记录，则检查 last_time；
+		1. 如果 last_time 超时，符合回收条件，则覆盖此记录并返回 bid；
+		2. 否则无法占用此 bid，需重新生成 bid 并再次检查冲突。
+
+> 无论是 2.1. 的新分配记录，还是 2.3.1. 的覆盖回收记录，都需要同时建立两个索引（分别以 bid、socket 信息为 key）指向该记录，以方便后面查询。
+
+预处理线程空闲时，调用 purge(now) 函数删除所有 ```last_time < now - expires``` 的记录（同时删除对应的 bid 和 socket 信息索引）以回收其所占用的 bid。
+> 其中回收时效为 24 小时： expires = 3600 * 24
+
+即该 socket 超过 24 小时没有上行数据便可以判定过期并回收；
+另 purge(now) 每次调用间隔不小于 10分钟。
+
+## 工程目录
+
+> 其中 Python 版服务器与 Python 版 SDK 共用一个库 'magpie-bridge'。
+
+### Java 版服务器
+
+工程根目录：
+    magpie-bridge/server-java/
+
+### Python 版服务器
+
+代码目录：
+    magpie-bridge/sdk-py/magpie_bridge/bridge/
+
+工程配置参数：
+    'console_scripts': [
+        'magpie-bridge=magpie_bridge.bridge.run:main'
+    ]
+
+协议定义相关的代码放在 protocol/ 目录下，工具类代码放在 magpie/ 下，服务端代码放在 bridge/ 下。
+
+> pip install magpie-bridge
+
+执行此命令安装之后，即可通过命令 ```magpie-bridge [参数]``` 启动服务端。

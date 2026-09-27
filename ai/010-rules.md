@@ -44,32 +44,3 @@
 所有接口/类/函数/参数/变量/常量等，要求符合该语言主流的命名规则，代码风格统一，符合社区惯例。
 
 所有程序文件头部带版权信息。
-
-## 工程目录
-
-SDK 包括 Java、Dart、Python 等版本。
-
-### Java SDK
-
-工程目录：
-    magpie-bridge/sdk-java/
-
-工程参数：
-    group: io.github.moky
-    name: Magpie
-
-### Dart SDK
-
-工程目录：
-    magpie-bridge/sdk-dart/
-
-工程参数：
-    name: magpie-bridge
-
-### Python SDK
-
-工程目录：
-    magpie-bridge
-
-工程参数：
-    name: magpie-bridge

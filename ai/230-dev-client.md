@@ -2,9 +2,6 @@
 
 这里定义 Magpie 客户端示例。
 
-Java 版客户端：
-    magpie-bridge/test-java/
-
 ## 桥接通讯测试流程
 
 两个客户端 A 和 B。
@@ -26,3 +23,15 @@ Java 版客户端：
 4. 等待用户输入接收方的 bid，以及要发送的文本内容；
 5. 构建 BridgePacket，交由服务器转发；
 6. 等待对方返回应答包，然后更新消息状态为“已接收”。
+
+## 工程目录
+
+### Java 版客户端
+
+工程根目录：
+    magpie-bridge/tests-java/
+
+### Dart 版客户端
+
+工程根目录：
+    magpie-bridge/tests-dart/

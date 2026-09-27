@@ -1,4 +1,4 @@
-# Magpie SDK (Dart 版)
+# Magpie SDK (Dart 示例)
 
 由于 Dart 语言对函数变量、空安全等特性更丰富，所以这里以 Dart 语言举例。
 
@@ -133,11 +133,56 @@ final class BridgePacket extends MessagePacket {
     );
     
     //
-    //  TODO: 各种指令工厂
+    //  Factory methods
     //
     
-    /// 生成普通数据包，通过服务器转发给对方
-    /// （为了尽可能控制数据包体积，默认使用空 command 打包）
+    /// 第一次握手
+    factory BridgePacket.syn([Uint8List? info]) => BridgePacket(info,
+        act: 0,
+        
+        target: 0,  // 这个包是发给服务器的指令，所以这里 target = 0
+        source: 0,  // 由于客户端此时仍未知自己的 bid 是什么，所以这里 source = 0
+        
+        sn:    0,
+        index: 0,
+        count: 1,
+        
+        command: Command.SYN
+    );
+    
+    /// 第二次握手
+    factory BridgePacket.synAck(Uint8List? info, {
+        required int target,  // 服务器为该客户端分配的 bid
+    }) => BridgePacket(info,
+        act: 1,
+        
+        target: target,
+        source: 0,  // 这个包是服务器发给客户端的，所以这里 source = 0
+        
+        sn:    0,
+        index: 0,
+        count: 1,
+        
+        command: Command.SYN_ACK
+    );
+    
+    /// 第三次握手
+    factory BridgePacket.ack(Uint8List? info, {
+        required int source,  // 从第二次握手包中得到的 target
+    }) => BridgePacket(info,
+        act: 1,
+        
+        target: 0,  // 这个包是发给服务器的指令，所以这里 target = 0
+        source: source,
+        
+        sn:    0,
+        index: 0,
+        count: 1,
+        
+        command: Command.ACK
+    );
+    
+    /// 普通数据包，通过服务器转发给接收方
     factory BridgePacket.data(Uint8List data, {
         required int target,
         required int source,
@@ -154,10 +199,11 @@ final class BridgePacket extends MessagePacket {
         index: index,
         count: count,
         
-        command: 0
+        command: 0  // 为了尽可能控制数据包体积，这里使用空 command 打包
     );
     
-    /// 生成应答包，通过服务器转发“确认收到”给对方（info 为附加信息，默认为空）
+    /// 数据应答包，通过服务器转发“确认收到”给原发送方
+    /// （packet 为收到的数据包；info 为附加信息，默认为空）
     factory BridgePacket.copy(Magpie packet, [Uint8List? info]) => BridgePacket(info,
         act: 1,
         
@@ -170,11 +216,70 @@ final class BridgePacket extends MessagePacket {
         index: packet.index,
         count: packet.count,
         
-        // 应答指令
-        command: Command.COPY
+        command: Command.COPY  // “确认收到”
     );
     
-    // ...
+    /// 心跳
+    factory BridgePacket.ping(Uint8List? info, {
+        required int source,
+    }) => BridgePacket(info,
+        act: 0,
+        
+        target: 0,  // 这个包是发给服务器的指令，所以这里 target = 0
+        source: source,
+        
+        sn:    0,
+        index: 0,
+        count: 1,
+        
+        command: Command.PING
+    );
+    
+    /// 心跳应答
+    /// （packet 为收到的 ping 包；info 为附加信息，默认为 ping.body ）
+    factory BridgePacket.pong(Magpie packet, [Uint8List? info]) => BridgePacket(info ?? packet.body,
+        act: 1,
+        
+        target: packet.source,
+        source: packet.target,  // 0
+        
+        sn:    packet.sn,       // 0
+        index: packet.index,    // 0
+        count: packet.count,    // 1
+        
+        command: Command.PONG
+    );
+    
+    /// 第一次挥手
+    factory BridgePacket.fin(Uint8List? info, {
+        required int source,
+    }) => BridgePacket(info,
+        act: 0,
+        
+        target: 0,  // 这个包是发给服务器的指令，所以这里 target = 0
+        source: source,
+        
+        sn:    0,
+        index: 0,
+        count: 1,
+        
+        command: Command.FIN
+    );
+    
+    /// 第二次挥手
+    /// （packet 为收到的 fin 包；info 为附加信息，默认为 fin.body ）
+    factory BridgePacket.finAck(Magpie packet, [Uint8List? info]) => BridgePacket(info ?? packet.body,
+        act: 1,
+        
+        target: packet.source,
+        source: packet.target,  // 0
+        
+        sn:    packet.sn,       // 0
+        index: packet.index,    // 0
+        count: packet.count,    // 1
+        
+        command: Command.FIN_ACK
+    );
     
 }
 ```
@@ -255,38 +360,8 @@ final class DirectPacket extends MessagePacket {
     
     //
     //  TODO: 各种指令工厂
+    //        （跟 BridgePacket 类似，除了没有 target 和 source 参数）
     //
-    
-    /// 生成普通数据包，直接发送给对方
-    /// （为了尽可能控制数据包体积，默认使用空 command 打包）
-    factory DirectPacket.data(Uint8List data, {
-        required int sn,
-        required int index,
-        required int count,
-    }) => DirectPacket(data,
-        act: 0,
-        
-        sn:    sn,
-        index: index,
-        count: count,
-        
-        command: 0
-    );
-    
-    /// 生成应答包，直接发送“确认收到”给对方（info 为附加信息，默认为空）
-    factory DirectPacket.copy(Magpie packet, [Uint8List? info]) => DirectPacket(info,
-        act: 1,
-        
-        // 原样保留
-        sn:    packet.sn,
-        index: packet.index,
-        count: packet.count,
-        
-        // 应答指令
-        command: Command.COPY
-    );
-    
-    // ...
     
 }
 ```
@@ -319,7 +394,7 @@ static int calcCmd({
     
 static int calcDsn({
     required int sn
-}) => sn == 0 ? 0 : 1;
+}) => sn == 0 ? 0 : 1;  // sn == 0 表示无 dsn（系统指令），数据包 sn 从 1 开始自增
     
 static int calcExt({
     required int count
@@ -357,6 +432,7 @@ final class MessageParser implements MagpieParser {
 	    // 1. 前 8 个字节的有效性检查
 	    //    检查 Magic Code；
 	    //    读出 flags，检查 E 合法性：E = type & 0x07（低 3 位，bit 3 不检查）；
+	    //    检查约束：E>0 时 D 必须为 1（D=0 且 E>0 判定为错误包）；
 	    //    读出 headSize 和 bodySize，然后与 flags 一起计算检查头长度合法性；
 	    
 	    // 2. 头参数的有效性检查

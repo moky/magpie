@@ -56,9 +56,9 @@
 | 发送 | data(target, source, sn, index, count, body) | data(sn, index, count, body) | |
 |     | copy(magpie)         | copy(magpie)         | 应答参数从 magpie 复制 |
 | 心跳 | ping(source)         | ping()               |                     |
-|     | pong(target)         | pong()               |                     |
+|     | pong(magpie)         | pong(magpie)         | 应答参数从 magpie 复制 |
 | 挥手 | fin(source)          | fin()                |                     |
-|     | finAck(target)       | finAck()             |                     |
+|     | finAck(magpie)       | finAck(magpie)       | 应答参数从 magpie 复制 |
 
 注：
 
@@ -76,3 +76,48 @@
 
 1. 根据协议一次检查 Magic Code、取得 type 中的各项标志位以及长度等信息，对数据合法性进行校验；
 2. 如果数据包校验不通过，则返回空，否则用解析出来的所有参数创建 MessagePacket 实例对象并返回。
+
+## 工程目录
+
+SDK 包括 Java、Python、Dart 等多个语言版本，
+其中 Python 版服务器与 Python 版 SDK 共用一个库 'magpie-bridge'。
+
+### Java SDK
+
+依赖版本：
+> Java 8
+
+工程配置参数：
+    name = 'Magpie'
+    group = 'io.github.moky'
+
+工程根目录：
+    magpie-bridge/sdk-java/
+
+### Python SDK
+
+依赖版本：
+> Python: >= 3.6
+
+工程配置参数：
+    name='magpie-bridge'
+
+工程根目录：
+    magpie-bridge/sdk-py/
+
+代码目录：
+    magpie-bridge/sdk-py/magpie_bridge/protocol/
+    magpie-bridge/sdk-py/magpie_bridge/magpie/
+
+协议定义相关的代码放在 protocol/ 目录下，工具类代码放在 magpie/ 下。
+
+### Dart SDK
+
+依赖版本：
+> sdk: '>=3.0.0 <4.0.0'
+
+工程配置参数：
+    name: magpie-bridge
+
+工程根目录：
+    magpie-bridge/sdk-dart/
