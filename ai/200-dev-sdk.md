@@ -53,6 +53,7 @@
 | 握手 | syn(source)          | syn()                | source 为预订 bid    |
 |     | synAck(target, info) | synAck(info)         | target 为新分配 bid  |
 |     | ack(source)          | ack()                |                     |
+|     | fail(magpie)         | -                    | 失败应答（服务器分配 bid 失败时使用） |
 | 发送 | data(target, source, sn, index, count, body) | data(sn, index, count, body) | |
 |     | copy(magpie)         | copy(magpie)         | 应答参数从 magpie 复制 |
 | 心跳 | ping(source)         | ping()               |                     |
@@ -62,7 +63,7 @@
 
 注：
 
-1. 第一次握手时可填 source 作为预订（期望）bid，可选（0 = 普通申请；非 0 时新建预订须 > 65535，loopback 重握手复用内定 bid 除外）；
+1. 第一次握手时可填 source 作为预订（期望）bid，可选（0 = 普通申请；非 0 时新建预订须 > 65535，loopback 重握手复用内定 bid 除外）；预订失败（被占用/非法/服务器已满）时服务器回复 FAIL 指令包，由客户端自行决定重新申请或放弃；
 2. 除了“发送”数据报之外（因已被 body 占用），其余各命令在实现时均可携带一个可选参数 info 放在协议体当作附加信息；
 3. 其中 synAck 命令的 info 为当前客户端的 socket 信息，其余命令的 info 暂时都为空；
 4. 以上方法返回对象均为 MessagePacket，标志位和字段值默认按协议规定设置。
