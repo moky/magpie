@@ -137,11 +137,15 @@ final class BridgePacket extends MessagePacket {
     //
     
     /// 第一次握手
-    factory BridgePacket.syn([Uint8List? info]) => BridgePacket(info,
+    /// [source] 为预订 bid（可选）：0 表示普通申请（由服务器分配），
+    /// 非 0 表示客户端希望预订该 bid（新建预订须 > 65535，若是 loopback 重握手复用之前的内定 bid，可传 = port ≤ 65535 的原值）。
+    factory BridgePacket.syn(Uint8List? info, {
+        int source = 0
+    }) => BridgePacket(info,
         act: 0,
         
         target: 0,  // 这个包是发给服务器的指令，所以这里 target = 0
-        source: 0,  // 由于客户端此时仍未知自己的 bid 是什么，所以这里 source = 0
+        source: source,  // 0 = 普通申请；非 0 = 预订 bid
         
         sn:    0,
         index: 0,
