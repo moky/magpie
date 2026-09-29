@@ -4,7 +4,7 @@
 
 ## 消息包
 
-消息包分两大类： BridgePacket（桥接包）和 DirectPacket（直通包）。
+消息包分两大类： BridgePacket（桥接包）和 DirectPacket（直连包）。
 
 ### 消息包基类 MessagePacket
 
@@ -20,8 +20,8 @@ class MessagePacket implements Magpie {
         required this.dsn,
         required this.ext,
          
-        required this.headSize,
-        required this.bodySize,
+        required this.headerLength,
+        required this.payloadLength,
          
         required this.target,
         required this.source,
@@ -32,7 +32,7 @@ class MessagePacket implements Magpie {
          
         required this.command,
         
-        required this.body
+        required this.payload
     });
     
     /// data package
@@ -45,8 +45,8 @@ class MessagePacket implements Magpie {
     final int dsn;
     final int ext;
     
-    final int headSize;
-    final int bodySize;
+    final int headerLength;
+    final int payloadLength;
     
     /// bid
     final int target;
@@ -59,7 +59,7 @@ class MessagePacket implements Magpie {
 
     final int command;
     
-    final Uint8List? body;
+    final Uint8List? payload;
     
     // ...
     
@@ -89,8 +89,8 @@ final class BridgePacket extends MessagePacket {
         required super.dsn,
         required super.ext,
         
-        // required super.headSize,
-        // required super.bodySize,
+        // required super.headerLength,
+        // required super.payloadLength,
 
         required super.target,
         required super.source,
@@ -101,14 +101,14 @@ final class BridgePacket extends MessagePacket {
         
         required super.command,
         
-        required super.body
+        required super.payload
     }) : super(
         /// 桥接包 B=1
         bid: 1,
             
-        /// 计算 headSize 和 bodySize
-        headSize: calcHeadSize(bid: 1, cmd: cmd, dsn: dsn, ext: ext),
-        bodySize: calcBodySize(body),
+        /// 计算 headerLength 和 payloadLength
+        headerLength: calcHeaderLength(bid: 1, cmd: cmd, dsn: dsn, ext: ext),
+        payloadLength: calcPayloadLength(payload),
     );
     
     factory BridgePacket(Uint8List? buffer, {
@@ -119,8 +119,8 @@ final class BridgePacket extends MessagePacket {
         // required int dsn,
         // required int ext,
          
-        // required int headSize,
-        // required int bodySize,
+        // required int headerLength,
+        // required int payloadLength,
          
         required int target,
         required int source,
@@ -131,7 +131,7 @@ final class BridgePacket extends MessagePacket {
          
         required int command,
         
-        Uint8List? body
+        Uint8List? payload
     }) => BridgePacket._(buffer,
         
         act: act,
@@ -140,8 +140,8 @@ final class BridgePacket extends MessagePacket {
         dsn: calcDsn(sn),
         ext: calcExt(count),
         
-        // headSize: ...,
-        // bodySize: ...,
+        // headerLength: ...,
+        // payloadLength: ...,
         
         target: target,
         source: source,
@@ -152,7 +152,7 @@ final class BridgePacket extends MessagePacket {
         
         command: command,
         
-        body: body
+        payload: payload
     );
     
     //
@@ -176,7 +176,7 @@ final class BridgePacket extends MessagePacket {
         
         command: Command.SYN,
         
-        body: info
+        payload: info
     );
     
     /// 第二次握手
@@ -194,7 +194,7 @@ final class BridgePacket extends MessagePacket {
         
         command: Command.SYN_ACK,
         
-        body: info
+        payload: info
     );
     
     /// 第三次握手
@@ -212,11 +212,11 @@ final class BridgePacket extends MessagePacket {
         
         command: Command.ACK,
         
-        body: info
+        payload: info
     );
     
     /// 失败
-    /// （packet 为收到的 syn 包；info 为附加信息，默认为 syn.body ）
+    /// （packet 为收到的 syn 包；info 为附加信息，默认为 syn.payload ）
     factory BridgePacket.fail(Magpie packet, [Uint8List? info]) => BridgePacket(null,
         act: 1,
         
@@ -229,7 +229,7 @@ final class BridgePacket extends MessagePacket {
         
         command: Command.FAIL,
         
-        body: info ?? packet.body
+        payload: info ?? packet.payload
     );
     
     /// 普通数据包，通过服务器转发给接收方
@@ -251,7 +251,7 @@ final class BridgePacket extends MessagePacket {
         
         command: 0,  // 为了尽可能控制数据包体积，这里使用空 command 打包
         
-        body: data
+        payload: data
     );
     
     /// 数据应答包，通过服务器转发“确认收到”给原发送方
@@ -270,7 +270,7 @@ final class BridgePacket extends MessagePacket {
         
         command: Command.COPY,  // “确认收到”
         
-        body: info
+        payload: info
     );
     
     /// 心跳
@@ -288,11 +288,11 @@ final class BridgePacket extends MessagePacket {
         
         command: Command.PING,
         
-        body: info
+        payload: info
     );
     
     /// 心跳应答
-    /// （packet 为收到的 ping 包；info 为附加信息，默认为 ping.body ）
+    /// （packet 为收到的 ping 包；info 为附加信息，默认为 ping.payload ）
     factory BridgePacket.pong(Magpie packet, [Uint8List? info]) => BridgePacket(null,
         act: 1,
         
@@ -305,7 +305,7 @@ final class BridgePacket extends MessagePacket {
         
         command: Command.PONG,
         
-        body: info ?? packet.body
+        payload: info ?? packet.payload
     );
     
     /// 第一次挥手
@@ -323,11 +323,11 @@ final class BridgePacket extends MessagePacket {
         
         command: Command.FIN,
         
-        body: info
+        payload: info
     );
     
     /// 第二次挥手
-    /// （packet 为收到的 fin 包；info 为附加信息，默认为 fin.body ）
+    /// （packet 为收到的 fin 包；info 为附加信息，默认为 fin.payload ）
     factory BridgePacket.finAck(Magpie packet, [Uint8List? info]) => BridgePacket(null,
         act: 1,
         
@@ -340,13 +340,13 @@ final class BridgePacket extends MessagePacket {
         
         command: Command.FIN_ACK,
         
-        body: info ?? packet.body
+        payload: info ?? packet.payload
     );
     
 }
 ```
 
-### 直通包 DirectPacket
+### 直连包 DirectPacket
 
 客户端与客户端直接通讯的消息包。
 
@@ -360,8 +360,8 @@ final class DirectPacket extends MessagePacket {
         required super.dsn,
         required super.ext,
         
-        // required super.headSize,
-        // required super.bodySize,
+        // required super.headerLength,
+        // required super.payloadLength,
 
         // required super.target,
         // required super.source,
@@ -372,14 +372,14 @@ final class DirectPacket extends MessagePacket {
         
         required super.command,
         
-        required super.body
+        required super.payload
     }) : super(
-        /// 直通包 B=0, 无 bid
+        /// 直连包 B=0, 无 bid
         bid: 0,
             
-        /// 计算 headSize 和 bodySize
-        headSize: calcHeadSize(bid: 0, cmd: cmd, dsn: dsn, ext: ext),
-        bodySize: calcBodySize(body),
+        /// 计算 headerLength 和 payloadLength
+        headerLength: calcHeaderLength(bid: 0, cmd: cmd, dsn: dsn, ext: ext),
+        payloadLength: calcPayloadLength(payload),
         
         target: 0,
         source: 0,
@@ -393,8 +393,8 @@ final class DirectPacket extends MessagePacket {
         // required int dsn,
         // required int ext,
          
-        // required int headSize,
-        // required int bodySize,
+        // required int headerLength,
+        // required int payloadLength,
          
         // required int target,
         // required int source,
@@ -405,7 +405,7 @@ final class DirectPacket extends MessagePacket {
          
         required int command,
         
-        Uint8List? body
+        Uint8List? payload
     }) => DirectPacket._(buffer,
         act: act,
         // bid: 0,
@@ -413,8 +413,8 @@ final class DirectPacket extends MessagePacket {
         dsn: calcDsn(sn),
         ext: calcExt(count),
         
-        // headSize: ...,
-        // bodySize: ...,
+        // headerLength: ...,
+        // payloadLength: ...,
         
         // target: 0,
         // source: 0,
@@ -425,7 +425,7 @@ final class DirectPacket extends MessagePacket {
         
         command: command,
         
-        body: body
+        payload: payload
     );
     
     //
@@ -447,16 +447,16 @@ static int calcType({
     required int ext,
 }) => (act << 7) | (bid << 6) | (cmd << 5) | (dsn << 4) | (ext & 0x07);
     
-static int calcHeadSize({
+static int calcHeaderLength({
     required int bid,
     required int cmd,
     required int dsn,
     required int ext,
 }) => 8 + 8*bid + 4*dsn + 2*ext + 4*cmd;
     
-static int calcBodySize(
-    Uint8List? body
-) => body?.length ?? 0;
+static int calcPayloadLength(
+    Uint8List? payload
+) => payload?.length ?? 0;
     
 static int calcCmd({
     required int command
@@ -503,7 +503,7 @@ final class MessageParser implements MagpieParser {
 	    //    检查 Magic Code；
 	    //    读出 flags，检查 E 合法性：E = type & 0x07（低 3 位，bit 3 不检查）；
 	    //    检查约束：E>0 时 D 必须为 1（D=0 且 E>0 判定为错误包）；
-	    //    读出 headSize 和 bodySize，然后与 flags 一起计算检查头长度合法性；
+	    //    读出 headerLength 和 payloadLength，然后与 flags 一起计算检查头长度合法性；
 	    
 	    // 2. 头参数的有效性检查
 	    //    根据 flags 指示依次读出 target, source, sn, index, count, command 等参数；

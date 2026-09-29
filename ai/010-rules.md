@@ -28,7 +28,7 @@
 
 | Name | Desc                                |
 |------|-------------------------------------|
-| MP   | MagPie, Magpie Protocol, Message Protocol, Message Packet |
+| MP   | MagPie, Magpie Protocol, Messaging Protocol, Message Packet |
 | BID  | Bridge ID （注册号/门牌号）            |
 | DSN  | Data Serial Number （数据/文件序列号） |
 | SYN  | 握手（建立连接）                      |

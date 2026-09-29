@@ -1,21 +1,21 @@
 # Magpie Bridge (Server)
 
-这里定义 Magpie Bridge 服务端。
+这里定义 Magpie Bridge 服务器。
 
 ## 各模块（线程）设计
 
 正如 **Magpie Bridge Architecture** 里定义的那样：
 
-1. 服务端通过一个**接收线程**从绑定的 UDP 端口中读取数据包，然后直接放入等待处理队列；
+1. 服务器通过一个**接收线程**从绑定的 UDP 端口中读取数据包，然后直接放入等待处理队列；
 2. **预处理线程**从前面的等待处理队列取出数据包，进行简单的校验之后，根据 target bid 决定是转交给“管理线程”处理，还是转交给“转发线程”处理；
-3. 服务端有一个**管理线程**，专门负责 bid 的分配管理、超时记录回收（purge），以及几个系统命令的应答；
-4. 服务端有 N 个**转发线程**，专门负责转发数据。
+3. 服务器有一个**管理线程**，专门负责 bid 的分配管理、超时记录回收（purge），以及几个系统命令的应答；
+4. 服务器有 N 个**转发线程**，专门负责转发数据。
 
 ### 注意事项
 
 1. **预处理线程**需要校验的内容包括：
 	- Magic Code
-	- Type、head size、body size，以及相互关系；
+	- Type、header length、payload length，以及相互关系；
 	- 将实际数据包的长度与根据上面各字段计算得到的值进行比较；
 	- 不需要校验 command 具体值；
 2. **管理线程**需要检查 command 及 source bid：
@@ -120,8 +120,8 @@ bid (32位无符号整数) 由高 16 位无符号整数 H 和低 16 位无符号
         'magpie-bridge=magpie_bridge.bridge.run:main'
     ]
 
-协议定义相关的代码放在 protocol/ 目录下，工具类代码放在 magpie/ 下，服务端代码放在 bridge/ 下。
+协议定义相关的代码放在 protocol/ 目录下，工具类代码放在 magpie/ 下，服务器代码放在 bridge/ 下。
 
 > pip install magpie-bridge
 
-执行此命令安装之后，即可通过命令 ```magpie-bridge [参数]``` 启动服务端。
+执行此命令安装之后，即可通过命令 ```magpie-bridge [参数]``` 启动服务器。
