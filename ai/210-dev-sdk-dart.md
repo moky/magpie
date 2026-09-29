@@ -159,12 +159,56 @@ final class BridgePacket extends MessagePacket {
     //  Factory methods
     //
     
+    factory BridgePacket.create({
+        
+        required int act,
+        // required int bid,
+        // required int cmd,
+        // required int dsn,
+        // required int ext,
+         
+        // required int headerLength,
+        // required int payloadLength,
+         
+        required int target,
+        required int source,
+         
+        required int sn,
+        required int index,
+        required int count,
+         
+        required int command,
+        
+        Uint8List? payload
+    }) => BridgePacket._(null,
+        
+        act: act,
+        // bid: 1,
+        cmd: calcCmd(command),
+        dsn: calcDsn(sn),
+        ext: calcExt(count),
+        
+        // headerLength: ...,
+        // payloadLength: ...,
+        
+        target: target,
+        source: source,
+        
+        sn:    sn,
+        index: index,
+        count: count,
+        
+        command: command,
+        
+        payload: payload
+    );
+    
     /// 第一次握手
     /// [source] 为预订 bid（可选）：0 表示普通申请（由服务器分配），
     /// 非 0 表示客户端希望预订该 bid（新建预订须 > 65535，若是 loopback 重握手复用之前的内定 bid，可传 = port ≤ 65535 的原值）。
     factory BridgePacket.syn(Uint8List? info, {
         int source = 0
-    }) => BridgePacket(null,
+    }) => BridgePacket.create(
         act: 0,
         
         target: 0,  // 这个包是发给服务器的指令，所以这里 target = 0
@@ -182,7 +226,7 @@ final class BridgePacket extends MessagePacket {
     /// 第二次握手
     factory BridgePacket.synAck(Uint8List? info, {
         required int target,  // 服务器为该客户端分配的 bid
-    }) => BridgePacket(null,
+    }) => BridgePacket.create(
         act: 1,
         
         target: target,
@@ -200,7 +244,7 @@ final class BridgePacket extends MessagePacket {
     /// 第三次握手
     factory BridgePacket.ack(Uint8List? info, {
         required int source,  // 从第二次握手包中得到的 target
-    }) => BridgePacket(null,
+    }) => BridgePacket.create(
         act: 1,
         
         target: 0,  // 这个包是发给服务器的指令，所以这里 target = 0
@@ -217,7 +261,7 @@ final class BridgePacket extends MessagePacket {
     
     /// 失败
     /// （packet 为收到的 syn 包；info 为附加信息，默认为 syn.payload ）
-    factory BridgePacket.fail(Magpie packet, [Uint8List? info]) => BridgePacket(null,
+    factory BridgePacket.fail(Magpie packet, [Uint8List? info]) => BridgePacket.create(
         act: 1,
         
         target: packet.source,
@@ -239,7 +283,7 @@ final class BridgePacket extends MessagePacket {
         required int sn,
         required int index,
         required int count,
-    }) => BridgePacket(null,
+    }) => BridgePacket.create(
         act: 0,
         
         target: target,
@@ -256,7 +300,7 @@ final class BridgePacket extends MessagePacket {
     
     /// 数据应答包，通过服务器转发“确认收到”给原发送方
     /// （packet 为收到的数据包；info 为附加信息，默认为空）
-    factory BridgePacket.copy(Magpie packet, [Uint8List? info]) => BridgePacket(null,
+    factory BridgePacket.copy(Magpie packet, [Uint8List? info]) => BridgePacket.create(
         act: 1,
         
         // bid 对调
@@ -276,7 +320,7 @@ final class BridgePacket extends MessagePacket {
     /// 心跳
     factory BridgePacket.ping(Uint8List? info, {
         required int source,
-    }) => BridgePacket(null,
+    }) => BridgePacket.create(
         act: 0,
         
         target: 0,  // 这个包是发给服务器的指令，所以这里 target = 0
@@ -293,7 +337,7 @@ final class BridgePacket extends MessagePacket {
     
     /// 心跳应答
     /// （packet 为收到的 ping 包；info 为附加信息，默认为 ping.payload ）
-    factory BridgePacket.pong(Magpie packet, [Uint8List? info]) => BridgePacket(null,
+    factory BridgePacket.pong(Magpie packet, [Uint8List? info]) => BridgePacket.create(
         act: 1,
         
         target: packet.source,
@@ -311,7 +355,7 @@ final class BridgePacket extends MessagePacket {
     /// 第一次挥手
     factory BridgePacket.fin(Uint8List? info, {
         required int source,
-    }) => BridgePacket(null,
+    }) => BridgePacket.create(
         act: 0,
         
         target: 0,  // 这个包是发给服务器的指令，所以这里 target = 0
@@ -328,7 +372,7 @@ final class BridgePacket extends MessagePacket {
     
     /// 第二次挥手
     /// （packet 为收到的 fin 包；info 为附加信息，默认为 fin.payload ）
-    factory BridgePacket.finAck(Magpie packet, [Uint8List? info]) => BridgePacket(null,
+    factory BridgePacket.finAck(Magpie packet, [Uint8List? info]) => BridgePacket.create(
         act: 1,
         
         target: packet.source,
@@ -510,7 +554,12 @@ final class MessageParser implements MagpieParser {
 	    //    检查各项参数是否越界；
 	    
 	    // 3. 读取 payload，然后创建消息包对象
-	    return MessagePacket(buffer, ...);
+	    
+        if (B == 0) {
+            return DirectPacket(buffer, ...);
+        } else {
+            return BridgePacket(buffer, ...);
+        }
 	}
 
 }

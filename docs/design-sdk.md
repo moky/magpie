@@ -1,139 +1,156 @@
-# Magpie Bridge SDK 设计
+# Magpie SDK（SDK 接口设计）
 
-SDK 定义基础库的关键接口和类实现，提供 Java、Python、Dart 等多个语言版本。
+> 定义基础库的关键接口和类实现，覆盖 Java、Python、Dart 等语言版本。
 
-## 1. 消息包类型
+## 1. 消息包定义
 
-核心消息接口命名为 **Magpie**，基类为 **MessagePacket**（网络中的每个消息包即一个 Magpie）。消息包分两大类：
+核心消息接口命名为 **Magpie**，基类为 **MessagePacket**——每一个在网络中传输的消息包就是一个 Magpie。
 
-- **BridgePacket**（桥接包，B=1）：客户端与服务器相互发送的消息包（含服务器中转的消息包）；
-- **DirectPacket**（直通包，B=0）：客户端之间直接发送的消息包，无 bid 字段。
+消息包分两大类：
+
+- **BridgePacket（桥接包）**：客户端与服务器相互发送的消息包（包括由服务器中转的消息包），B=1；
+- **DirectPacket（直连包）**：客户端之间直接发送的消息包，B=0、无 bid 字段。
 
 ```mermaid
-flowchart TD
-    Magpie["Magpie（接口）"] --> MP["MessagePacket<br/>（基类实现）"]
-    MP --> BP["BridgePacket<br/>B=1，含 target/source"]
-    MP --> DP["DirectPacket<br/>B=0，无 bid"]
+classDiagram
+    class Magpie {
+        +target
+        +source
+        +sn
+        +index
+        +count
+        +command
+        +payload
+        +pack()
+    }
+    class MessagePacket {
+        +version
+        +flagAck
+        +flagBid
+        +flagCmd
+        +flagDsn
+        +extLen
+        +headerLength
+        +payloadLength
+        +isAck()
+        +hasBid()
+        +hasCmd()
+        +hasDsn()
+        +hasExt()
+    }
+    class BridgePacket
+    class DirectPacket
+    Magpie <|.. MessagePacket
+    MessagePacket <|-- BridgePacket
+    MessagePacket <|-- DirectPacket
 ```
 
-### 1.1 核心接口 Magpie
+### 1.1. 核心接口 Magpie
 
-所有属性只读（不含 setter）：
+所有属性均为只读（不含 setter）：
 
 | 属性 | 说明 |
 |------|------|
 | target | 目标 bid |
 | source | 来源 bid |
-| sn | 数据序列号（dsn） |
+| sn | 数据序列号 |
 | index | 分包编号 |
 | count | 分包总数 |
 | command | 命令 |
-| body | 数据体 payload |
+| payload | 数据载荷 |
+| pack() | 生成网络字节序数据包 |
 
-方法：`pack()` 生成网络字节序数据包。
-
-### 1.2 实现类 MessagePacket
+### 1.2. 实现类 MessagePacket
 
 扩展属性（只读）：
 
 | 属性 | 说明 |
 |------|------|
-| version | 协议版本，固定 "1.0" |
-| flagAck | 应答标志位（0/1） |
-| flagBid | 桥接标志位（0/1） |
-| flagCmd | 命令标志位（0/1，普通数据包默认 0） |
-| flagDsn | 序列号标志位（0/1） |
-| extLen | 额外参数长度（E = type & 0x07，允许 0~4；打包仅取 0/2/4） |
-| headSize | 包头大小（8 ~ 32） |
-| bodySize | 包体大小（0 ~ 1024） |
+| version | 协议版本，固定值 "1.0" |
+| flagAck | 应答标志位，0 或 1 |
+| flagBid | 桥接标志位，0 或 1 |
+| flagCmd | 命令标志位，0 或 1（普通数据包默认 0） |
+| flagDsn | 序列号标志位，0 或 1 |
+| extLen | 额外参数长度：解包时 `E = type & 0x07`（允许 0~4）；打包时仅取 0/2/4 |
+| headerLength | 协议头长度，8 - 32 |
+| payloadLength | 载荷长度，0 - 1024 |
 
-扩展方法：`isAck`、`hasBid`（是否与服务器通讯）、`hasCmd`、`hasDsn`、`hasExt`。
+扩展方法：
 
-## 2. 数据报工厂
+| 方法 | 说明 |
+|------|------|
+| isAck() | 是否为应答包 |
+| hasBid() | 是否包含 bid，即是否与服务器通讯 |
+| hasCmd() | 是否包含命令（普通数据包默认 false） |
+| hasDsn() | 是否包含数据序列号 |
+| hasExt() | 是否包含额外分包参数 |
 
-在 BridgePacket 和 DirectPacket 上分别定义静态工厂方法，按协议调用 `MessagePacket.create()` 创建消息包：
+## 2. 消息包工厂
 
-| | BridgePacket (C-S) | DirectPacket (C-C) | 说明 |
-|---|--------------------|--------------------|------|
-| 握手 | syn(source) | syn() | source 为预订 bid |
-| | synAck(target, info) | synAck(info) | target 为新分配 bid |
-| | ack(source) | ack() | |
-| | fail(magpie) | - | 失败应答（服务器分配 bid 失败时使用） |
-| 发送 | data(target, source, sn, index, count, body) | data(sn, index, count, body) | |
-| | copy(magpie) | copy(magpie) | 应答参数从 magpie 复制 |
-| 心跳 | ping(source) | ping() | |
-| | pong(magpie) | pong(magpie) | 应答参数从 magpie 复制 |
-| 挥手 | fin(source) | fin() | |
-| | finAck(magpie) | finAck(magpie) | 应答参数从 magpie 复制 |
+在 BridgePacket 和 DirectPacket 上分别定义静态工厂方法，按协议调用 `create()` 创建各类消息包：
 
-注：
+|      | BridgePacket (C-S)          | DirectPacket (C-C)    | 说明                     |
+|------|-----------------------------|-----------------------|--------------------------|
+| 握手 | syn(source)                 | syn()                 | source 为预订 bid        |
+|      | synAck(target, info)        | synAck(info)          | target 为新分配 bid      |
+|      | ack(source)                 | ack()                 |                          |
+|      | fail(magpie)                | -                     | 失败应答（服务器分配 bid 失败）|
+| 发送 | data(target, source, sn, index, count, payload) | data(sn, index, count, payload) |                |
+|      | copy(magpie)                | copy(magpie)          | 应答参数从 magpie 复制    |
+| 心跳 | ping(source)                | ping()                |                          |
+|      | pong(magpie)                | pong(magpie)          | 应答参数从 magpie 复制    |
+| 挥手 | fin(source)                 | fin()                 |                          |
+|      | finAck(magpie)              | finAck(magpie)        | 应答参数从 magpie 复制    |
 
-1. 第一次握手可填 source 作为预订（期望）bid，可选（0 = 普通申请；非 0 新建预订须 > 65535，loopback 重握手复用内定 bid 除外）；预订失败（被占用/非法/服务器已满）时服务器回复 FAIL，由客户端自行决定重新申请或放弃；
-2. 除"发送"数据报外（body 被占用），其余各命令均可携带可选参数 info 放在协议体作附加信息；
-3. 其中 synAck 的 info 为当前客户端 socket 信息，其余命令的 info 默认为空（fail/pong/finAck 默认回显请求包 body）；
+**注**：
+
+1. 第一次握手时可填 source 作为预订（期望）bid，可选（0 = 普通申请；非 0 时新建预订须 > 65535，loopback 重握手复用内定 bid 除外）；预订失败（被占用/非法/服务器已满）时服务器回复 FAIL 指令包，由客户端自行决定重新申请或放弃；
+2. 除了"发送"消息包之外（因已被 payload 占用），其余各命令在实现时均可携带一个可选参数 `info` 放在载荷当作附加信息；
+3. 其中 synAck 命令的 info 为当前客户端的 socket 信息，其余命令的 info 暂时都为空；
 4. 以上方法返回对象均为 MessagePacket，标志位和字段值默认按协议规定设置。
 
-## 3. 数据报解析器
+## 3. 消息包解析器
 
-收到完整数据包后由解析器 MessageParser 校验解析，接口方法 `parse(data)`：
-
-1. 依次检查 Magic Code，取得 type 各项标志位及长度信息，校验数据合法性；
-2. 校验不通过返回空；通过则用解析出的参数创建 MessagePacket 实例返回。
+接收到完整的数据包之后，由解析器 **Message Parser** 进行校验解析。
 
 ```mermaid
 flowchart TD
-    A["parse(data)"] --> B["前 8 字节有效性检查<br/>Magic Code / flags / E 合法性 / 约束"]
-    B --> C["头参数有效性检查<br/>按 flags 读取各字段<br/>检查越界"]
-    C --> D["读取 payload"]
-    D --> E["创建 MessagePacket 返回"]
+    RX[收到完整数据包] --> C1[检查 Magic Code]
+    C1 --> C2[取出 type 各标志位及长度信息<br/>校验合法性]
+    C2 -- "校验不通过" --> NIL[返回空]
+    C2 -- "通过" --> NEW["根据 B 值创建<br/>BridgePacket / DirectPacket"]
+    NEW --> RET[返回消息包对象]
 ```
 
-> 解析时校验约束：E>0 时 D 必须为 1（D=0 且 E>0 判定为错误包）；C=1 时 command 必须非空。
+### 解析器接口 Parser
 
-## 4. 计算公式（Dart 示例）
+```
+接口方法： parse(data)
+```
 
-```dart
-static int calcType({
-    required int act,
-    required int bid,
-    required int cmd,
-    required int dsn,
-    required int ext,
-}) => (act << 7) | (bid << 6) | (cmd << 5) | (dsn << 4) | (ext & 0x07);
+1. 根据协议一次检查 Magic Code、取得 type 中的各项标志位以及长度等信息，对数据合法性进行校验；
+2. 如果数据包校验不通过，则返回空；否则用解析出来的所有参数，根据 B 的值创建对应的消息包对象并返回（B=1 时创建 BridgePacket，B=0 时创建 DirectPacket）。
 
-static int calcHeadSize({
-    required int bid,
-    required int cmd,
-    required int dsn,
-    required int ext,
-}) => 8 + 8 * bid + 4 * dsn + 2 * ext + 4 * cmd;
+## 4. 计算公式（示例）
 
-static int calcBodySize(Uint8List? body) => body?.length ?? 0;
+```
+calcType(act, bid, cmd, dsn, ext) = (act << 7) | (bid << 6) | (cmd << 5) | (dsn << 4) | (ext & 0x07)
 
-static int calcCmd({required int command}) => command == 0 ? 0 : 1;
+calcHeaderLength(bid, cmd, dsn, ext) = 8 + 8*bid + 4*dsn + 2*ext + 4*cmd
 
-static int calcDsn({required int sn}) => sn == 0 ? 0 : 1;  // sn == 0 表示无 dsn（系统指令），数据包 sn 从 1 开始自增
+calcPayloadLength(payload) = payload.length
 
-static int calcExt({required int count}) {
-    if (count >= 65536) {
-        return 4;
-    } else if (count >= 2) {
-        return 2;
-    } else {
-        assert(count == 1, 'packet count error: $count');
-        return 0;
-    }
-}
+calcCmd(command)     = command == 0 ? 0 : 1
+calcDsn(sn)          = sn == 0 ? 0 : 1
+calcExt(count)       = count >= 65536 ? 4 : count >= 2 ? 2 : 0
 ```
 
 ## 5. 工程目录
 
-SDK 包括 Java、Python、Dart 等多个语言版本，其中 Python 版服务器与 Python 版 SDK 共用一个库 `magpie-bridge`。
-
-| 语言 | 依赖 | 工程参数 | 根目录 |
-|------|------|---------|--------|
-| Java | Java 8 | name='Magpie', group='io.github.moky' | magpie-bridge/sdk-java/ |
-| Python | Python >= 3.6 | name='magpie-bridge' | magpie-bridge/sdk-py/ |
-| Dart | sdk: '>=3.0.0 <4.0.0' | name: magpie-bridge | magpie-bridge/sdk-dart/ |
+| 语言 | 工程根目录 | 依赖版本 |
+|------|-----------|----------|
+| Java | `magpie-bridge/sdk-java/` | Java 8，name = 'Magpie'，group = 'io.github.moky' |
+| Python | `magpie-bridge/sdk-py/` | Python >= 3.6，name = 'magpie-bridge' |
+| Dart | `magpie-bridge/sdk-dart/` | sdk '>=3.0.0 <4.0.0'，name: magpie-bridge |
 
 Python 代码目录：`magpie_bridge/protocol/`（协议定义）、`magpie_bridge/magpie/`（工具类）。
