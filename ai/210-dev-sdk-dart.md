@@ -67,7 +67,7 @@ class MessagePacket implements Magpie {
     Uint8List pack() {
         Uint8List? binary = buffer;
         if (binary == null) {
-            // TODO: 将各字段打包为网络字节序，并缓存到 buffer
+            // TODO: 将各字段打包为网络字节序，更新 binary，然后缓存到 buffer
             buffer = binary;
         }
         return binary;
@@ -545,7 +545,7 @@ final class MessageParser implements MagpieParser {
 	    }
 	    // 1. 前 8 个字节的有效性检查
 	    //    检查 Magic Code；
-	    //    读出 flags，检查 E 合法性：E = type & 0x07（低 3 位，bit 3 不检查）；
+	    //    读出 flags（bid = (type >> 6) & 0x01），检查 E 合法性：E = type & 0x07（低 3 位，bit 3 不检查）；
 	    //    检查约束：E>0 时 D 必须为 1（D=0 且 E>0 判定为错误包）；
 	    //    读出 headerLength 和 payloadLength，然后与 flags 一起计算检查头长度合法性；
 	    
@@ -555,7 +555,7 @@ final class MessageParser implements MagpieParser {
 	    
 	    // 3. 读取 payload，然后创建消息包对象
 	    
-        if (B == 0) {
+        if (bid == 0) {
             return DirectPacket(buffer, ...);
         } else {
             return BridgePacket(buffer, ...);
