@@ -6,7 +6,7 @@
 
 客户端向服务器申请 bid（Bridge ID，门牌号）；直连双方无需 bid，但仍需握手建立“连接”。
 
-|        | Flags               | Command | DSN |
+|        | Flags               | Command | SN |
 |--------|---------------------|---------|-----|
 | 第 1 次 | A=0, C=1, D=0, E=0  | "SYN?"  | -   |
 | 第 2 次 | A=1, C=1, D=0, E=0  | "SYN!"  | -   |
@@ -15,9 +15,11 @@
 
 > 失败行：服务器 bid 分配失败（预订被占用/非法、内定冲突、服务器已满）时以 "FAIL" 应答，由客户端自行决定重新申请或放弃。
 
-> "FAIL" 的载荷区分两种失败：bid 分配失败时载荷为空，客户端重新申请或放弃；连接未确认（漏发第三次握手 "ACK!"）时载荷为 socket 信息 `{"UDP":"ip:port"}`（与 "SYN!" 相同，该 FAIL 除 command 外与 "SYN!" 字段一致：target=bid、source=0、无 dsn/分包参数），客户端可直接补发 "ACK!"（幂等），无需重新握手。
+> "FAIL" 的载荷区分两种失败：bid 分配失败时载荷为空，客户端重新申请或放弃；连接未确认（漏发第三次握手 "ACK!"）时载荷为 socket 信息 `{"UDP":"ip:port"}`（与 "SYN!" 相同，该 FAIL 除 command 外与 "SYN!" 字段一致：target=bid、source=0、无 sn/分包参数），客户端可直接补发 "ACK!"（幂等），无需重新握手。
 
-> 系统指令不携带 dsn（D=0），应答的配对依靠 socket 完成：从哪个 socket 收到请求，就向哪个 socket 回复；服务器场景下 source bid 仅用于身份校验（验证 bid 与 socket 的绑定关系），不参与应答寻址。发送方无需维护等待应答的队列。
+> 系统指令（D=0）不携带 sn，应答靠 socket 配对：从哪个 socket 收到请求，就回哪个 socket；source bid 不决定应答发给谁，仅用于身份校验（验证 bid 与 socket 的绑定关系）。发送方无需维护等待应答的队列。
+>
+> 数据包（D=1）不同：直连（B=0）收件人即对方 socket；桥接（B=1）收件人由 target bid 指定；"COPY" 应答均靠 sn 配对。
 
 ### 1.1. 客户端 → 服务器（C-S 握手）
 
@@ -82,7 +84,7 @@ flowchart TD
 
 ## 2. 挥手机制（关闭连接）
 
-|        | Flags               | Command | DSN |
+|        | Flags               | Command | SN |
 |--------|---------------------|---------|-----|
 | 第 1 次 | A=0, C=1, D=0, E=0  | "FIN?"  | -   |
 | 第 2 次 | A=1, C=1, D=0, E=0  | "FIN!"  | -   |
@@ -108,7 +110,7 @@ sequenceDiagram
 
 ### 3.1. 通过服务器转发
 
-|   | Flags               | Command | DSN   | index, count |
+|   | Flags               | Command | SN   | Index, Count |
 |---|---------------------|---------|-------|--------------|
 | 1 | A=0, B=1, C=0, D=1  | -       | 自增值 | 实际分包信息   |
 | 1 | A=0, B=1, C=1, D=1  | "DATA"  | 自增值 | 实际分包信息   |
@@ -120,7 +122,7 @@ sequenceDiagram
 
 ### 3.2. 直接发送
 
-|   | Flags               | Command | DSN   | index, count |
+|   | Flags               | Command | SN   | Index, Count |
 |---|---------------------|---------|-------|--------------|
 | 2 | A=0, B=0, C=0, D=1  | -       | 自增值 | 实际分包信息   |
 | 2 | A=0, B=0, C=1, D=1  | "DATA"  | 自增值 | 实际分包信息   |
@@ -129,11 +131,11 @@ sequenceDiagram
 
 ## 4. 应答机制
 
-客户端收到普通数据包（A=0, D=1，command 为 "DATA" 或无 command）时，均需回复数据应答包 "COPY"（A=1, D=1，回填源 dsn 及 index/count）。
+客户端收到普通数据包（A=0, D=1，command 为 "DATA" 或无 command）时，均需回复数据应答包 "COPY"（A=1, D=1，回填源 sn 及 index/count）。
 
 系统指令（D=0）不回复 "COPY"，而是回复各自的专用应答（SYN!/PONG/FIN!，失败场景回复 "FAIL"）。
 
-|   | Flags               | Command | DSN   | index, count |
+|   | Flags               | Command | SN   | Index, Count |
 |---|---------------------|---------|-------|--------------|
 | 1 | A=1, B=1, C=1, D=1  | "COPY"  | 源值  | 源分包信息     |
 | 2 | A=1, B=0, C=1, D=1  | "COPY"  | 源值  | 源分包信息     |
@@ -143,7 +145,7 @@ sequenceDiagram
 1. 将 type 最高位 A 置 1：`type = type | 0x80`，表示应答；
 2. 若 B=1（经服务器转发），将 target 和 source 对调，发回同一个服务器中转；
 3. 令 C=1：`type = type | 0x20`，command 字段设为 "COPY"；
-4. 若 D=1，dsn 和可能存在的 index, count 均保持不变；
+4. 若 D=1，sn 和可能存在的 index, count 均保持不变；
 5. 标志位 B/D/E 不变；
 6. 载荷为空，也可携带自定义信息。
 
@@ -153,9 +155,9 @@ sequenceDiagram
     participant S as 服务器 S
     participant B as 客户端 B
 
-    A->>S: DATA (target=B, source=A, dsn, index, count)
+    A->>S: DATA (target=B, source=A, sn, index, count)
     S->>B: 原样转发
-    B->>S: COPY (target=A, source=B, 回填 dsn/index/count)
+    B->>S: COPY (target=A, source=B, 回填 sn/index/count)
     S->>A: 原样转发
     Note over A: 收到 COPY，标记"已接收"
 ```
@@ -164,7 +166,7 @@ sequenceDiagram
 
 客户端定期检查自身发送时间，超过预设时间无任何数据包发送（含应答包），则主动发送“心跳”包维持连接状态。
 
-|   | Flags               | Command | DSN |
+|   | Flags               | Command | SN |
 |---|---------------------|---------|-----|
 | 1 | A=0, C=1, D=0, E=0  | "PING"  | -   |
 | 2 | A=1, C=1, D=0, E=0  | "PONG"  | -   |
