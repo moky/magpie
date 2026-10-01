@@ -88,6 +88,7 @@
 
 - 轮询其辖下的 source bid，如果对应的等待转发队列不为空则取出最前面的数据包；
 - 如果当前所有的 bid 都没有等待转发任务，则 sleep 一小段时间后继续下一个循环；
+- 取出该包中的 source bid，检查 yellow_pages 中的记录存在、socket 信息匹配且已完成第三次握手（ACK!）；连接未确认则以 "FAIL"（载荷带 socket 信息，与 "SYN!" 相同）通知客户端并丢弃该包；
 - 取出该包中的 target bid，检查 yellow_pages 中的记录是否存在并活跃，否则直接丢弃进入下一个循环；
 - 将该数据包通过绑定的 UDP 接口发送给 target bid 所对应的 socket；
 

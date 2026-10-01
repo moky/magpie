@@ -7,7 +7,9 @@
 ```mermaid
 flowchart TD
     A1[绑定 UDP] --> A2[向服务器申请 bid]
-    A2 -- "收到 FAIL" --> A2R[重新申请或放弃]
+    A2 -- "收到 FAIL（空载荷）" --> A2R[重新申请或放弃]
+    A2 -- "收到 FAIL（socket 信息）" --> A2C[直接补发 ACK!]
+    A2C --> A3
     A2 -- "成功" --> A3[显示 bid 及服务器返回的 socket 信息]
     A3 --> A4[等待其他客户端发送数据]
     A4 --> A5[等待期间维护心跳机制]
@@ -16,7 +18,7 @@ flowchart TD
     A7 --> A4
 ```
 
-1. 绑定 UDP，然后向服务器申请 bid（若收到 "FAIL" 则重新申请或放弃）；
+1. 绑定 UDP，然后向服务器申请 bid（若收到 "FAIL"：载荷为空则重新申请或放弃；载荷为 socket 信息 `{"UDP":"ip:port"}` 则说明连接未确认，直接补发 "ACK!"）；
 2. 将获取到的 bid 显示出来，包括服务器返回的 socket 信息；
 3. 等待其他客户端发送数据；
 4. 等待期间需要维护心跳机制；
@@ -28,7 +30,9 @@ flowchart TD
 ```mermaid
 flowchart TD
     B1[绑定 UDP] --> B2[向服务器申请 bid]
-    B2 -- "收到 FAIL" --> B2R[重新申请或放弃]
+    B2 -- "收到 FAIL（空载荷）" --> B2R[重新申请或放弃]
+    B2 -- "收到 FAIL（socket 信息）" --> B2C[直接补发 ACK!]
+    B2C --> B3
     B2 -- "成功" --> B3[显示获取的 bid 及 socket 信息]
     B3 --> B4[等待用户输入接收方信息<br/>bid 或 socket 信息]
     B4 --> B5[输入接收方 bid 及要发送的文本内容]
@@ -38,7 +42,7 @@ flowchart TD
     B8 --> B4
 ```
 
-1. 绑定 UDP，然后向服务器申请 bid（若收到 "FAIL" 则重新申请或放弃）；
+1. 绑定 UDP，然后向服务器申请 bid（若收到 "FAIL"：载荷为空则重新申请或放弃；载荷为 socket 信息 `{"UDP":"ip:port"}` 则说明连接未确认，直接补发 "ACK!"）；
 2. 将获取的 bid 显示出来，包括服务器返回的 socket 信息；
 3. 等待用户输入接收方信息（bid 或 socket 信息）；
 4. 等待用户输入接收方的 bid，以及要发送的文本内容；
@@ -49,5 +53,5 @@ flowchart TD
 
 | 语言 | 工程根目录 |
 |------|-----------|
-| Java 版客户端 | `magpie-bridge/tests-java/` |
-| Dart 版客户端 | `magpie-bridge/tests-dart/` |
+| Java 版客户端 | `magpie/tests-java/` |
+| Dart 版客户端 | `magpie/tests-dart/` |

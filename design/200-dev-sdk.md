@@ -53,7 +53,7 @@
 | 握手 | syn(source)          | syn()                | source 为预订 bid    |
 |     | synAck(target, info) | synAck(info)         | target 为新分配 bid  |
 |     | ack(source)          | ack()                |                     |
-|     | fail(magpie)         | -                    | 失败应答（服务器分配 bid 失败时使用） |
+|     | fail(target, info)   | -                    | 失败应答             |
 | 发送 | data(target, source, sn, index, count, payload) | data(sn, index, count, payload) | |
 |     | copy(magpie)         | copy(magpie)         | 应答参数从 magpie 复制 |
 | 心跳 | ping(source)         | ping()               |                     |
@@ -65,7 +65,7 @@
 
 1. 第一次握手时可填 source 作为预订（期望）bid，可选（0 = 普通申请；非 0 时新建预订须 > 65535，loopback 重握手复用内定 bid 除外）；预订失败（被占用/非法/服务器已满）时服务器回复 "FAIL" 指令包，由客户端自行决定重新申请或放弃；
 2. 除了“发送”消息包之外（因已被 payload 占用），其余各命令在实现时均可携带一个可选参数 info 放在载荷当作附加信息；
-3. 其中 synAck 命令的 info 为当前客户端的 socket 信息；fail/pong/finAck 默认回填原包载荷；其余命令的 info 默认空；
+3. 其中 synAck 命令的 info 为当前客户端的 socket 信息；pong/finAck 默认回填原包载荷；fail 的 info 按场景区分（bid 分配失败时为空、连接未确认时为 socket 信息）；其余命令的 info 默认空；
 4. 以上方法返回对象均为 MessagePacket，标志位和字段值默认按协议规定设置。
 
 ### 消息包解析器

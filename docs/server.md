@@ -1,6 +1,6 @@
 # Magpie Bridge Server（服务器设计）
 
-> 对应 ai/220-dev-server.md，为 FSD 服务器分册：服务器内部实现规格（线程详细设计、Bridge ID 管理、工程目录）。
+> 对应 design/220-dev-server.md，为 FSD 服务器分册：服务器内部实现规格（线程详细设计、Bridge ID 管理、工程目录）。
 > 系统架构总览见 architecture.md。
 
 ## 1. 模块（线程）设计
@@ -129,7 +129,7 @@ flowchart TD
     SEND --> LOOP
 ```
 
-> 转发链路共检查**两个 bid**：预处理线程已校验 source bid 与 socket 信息匹配；转发线程发送前校验 target bid 记录存在且活跃。只有两个 bid 均匹配才会转发。
+> 转发链路共检查**两个 bid**：预处理线程已校验 source bid 与 socket 信息匹配；转发线程发送前校验 source bid 已完成第三次握手（ACK!，连接未确认时以 "FAIL" 载荷带 socket 信息通知客户端并丢弃）且 target bid 记录存在并活跃。只有两个 bid 均匹配才会转发。
 
 **流量控制**：为避免流量风暴，转发线程设置限流（规定时间内最多处理任务数上限）；任务分散到 N=256 条线程，单条线程达到上限不影响其他线程，将风暴限制在小影响范围。
 
@@ -167,7 +167,7 @@ socket 信息包括 ip 和 port，作为 key 时为 `"{ip}:{port}"` 字符串。
 ### 2.4. 内存分配表
 
 - 以 bid 为 key，或以记录中的 key 为 key，均可查询分配记录；
-- 记录字段：bid、key、socket 信息、last_time（最后活跃时间）；
+- 记录字段：bid、key、socket 信息、last_time（最后活跃时间）、acknowledged（是否已完成第三次握手 ACK!，置位后连接才算 established）；
 - 每次收到数据包并检查通过后更新 last_time；只有预处理线程和管理线程更新 last_time，转发线程不需要（指派前已更新）。
 
 > 记录中的 key 为 socket 信息字符串 "{ip}:{port}"，创建记录时生成一次即可；由于 ip 和 port 固定不变，后续查询时直接取用该字段，无需每次重新拼接。
@@ -212,7 +212,7 @@ flowchart TD
 
 | 语言 | 位置 |
 |------|------|
-| Java 服务器 | `magpie-bridge/server-java/` |
-| Python 服务器 | `magpie-bridge/sdk-py/magpie_bridge/bridge/` |
+| Java 服务器 | `magpie/server-java/` |
+| Python 服务器 | `magpie/sdk-py/magpie_bridge/bridge/` |
 
 > Python 版服务器与 Python 版 SDK 共用一个库 `magpie-bridge`；协议代码在 `protocol/`，工具类在 `magpie/`，服务器代码在 `bridge/`，通过 `console_scripts: ['magpie-bridge=magpie_bridge.bridge.run:main']` 启动。

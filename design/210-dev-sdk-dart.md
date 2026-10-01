@@ -260,20 +260,23 @@ final class BridgePacket extends MessagePacket {
     );
     
     /// 失败
-    /// （packet 为收到的 syn 包；info 为附加信息，默认为 syn.payload ）
-    factory BridgePacket.fail(Magpie packet, [Uint8List? info]) => BridgePacket.create(
+    /// 1. bid 分配失败：target = 期望的（预订）bid，info 为空；
+    /// 2. 第三次握手包缺失：target = 已分配的 bid，info 为 socket 信息（同 "SYN!"）。
+    factory BridgePacket.fail(Uint8List? info, {
+        required int target,  // 客户端 bid（期望或已分配）
+    }) => BridgePacket.create(
         act: 1,
         
-        target: packet.source,
-        source: packet.target,  // 0
+        target: target,
+        source: 0,  // 这个包是服务器发给客户端的，所以这里 source = 0
         
-        sn:    packet.sn,       // 0
-        index: packet.index,    // 0
-        count: packet.count,    // 1
+        sn:    0,
+        index: 0,
+        count: 1,
         
         command: Command.FAIL,
         
-        payload: info ?? packet.payload
+        payload: info
     );
     
     /// 普通数据包，通过服务器转发给接收方

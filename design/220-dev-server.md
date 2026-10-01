@@ -21,7 +21,7 @@
 2. **管理线程**需要检查 command 及 source bid：
 	- 如果 command 是 "SYN?"，则为第一次握手（唯一允许 source bid 无内存记录的场景）：source bid 非 0 时一律走预订流程（无论来源是否 loopback，先检查是否合法且未被占用，失败则回复 "FAIL" 指令包）；source bid 为 0 时，loopback 来源按内定规则分配 bid = port，其余来源分配新 bid；
 	- 否则 source bid 必须跟内存记录（socket 信息）匹配，然后根据 command 值进行相应的处理和应答；
-3. **转发线程**需要检查两个 bid，只有 socket 信息匹配才会转发；
+3. **转发线程**需要检查两个 bid，只有 socket 信息匹配才会转发；其中 source bid 还须已完成第三次握手（ACK!），连接未确认时以 "FAIL"（载荷带 socket 信息，与 "SYN!" 相同）通知客户端；
 
 ## Bridge ID 管理
 
@@ -60,6 +60,7 @@ bid (32位无符号整数) 由高 16 位无符号整数 H 和低 16 位无符号
 - key  // "{ip}:{port}"
 - socket 信息
 - last_time  // 最后活跃时间
+- acknowledged  // 是否已完成第三次握手（ACK!），置位后连接才算 established
 
 > key 为 socket 信息的字符串形式（"{ip}:{port}"），创建记录时生成一次即可；由于 ip 和 port 固定不变，后续查询时直接取用该字段，无需每次重新拼接。
 
