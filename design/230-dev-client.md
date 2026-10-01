@@ -29,9 +29,9 @@
 ### Java 版客户端
 
 工程根目录：
-    magpie-bridge/tests-java/
+    magpie/tests-java/
 
 ### Dart 版客户端
 
 工程根目录：
-    magpie-bridge/tests-dart/
+    magpie/tests-dart/

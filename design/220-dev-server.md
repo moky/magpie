@@ -111,12 +111,12 @@ bid (32位无符号整数) 由高 16 位无符号整数 H 和低 16 位无符号
 ### Java 版服务器
 
 工程根目录：
-    magpie-bridge/server-java/
+    magpie/server-java/
 
 ### Python 版服务器
 
 代码目录：
-    magpie-bridge/sdk-py/magpie_bridge/bridge/
+    magpie/sdk-py/magpie_bridge/bridge/
 
 工程配置参数：
     'console_scripts': [

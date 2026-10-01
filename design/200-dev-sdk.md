@@ -94,7 +94,7 @@ SDK 包括 Java、Python、Dart 等多个语言版本，
     group = 'io.github.moky'
 
 工程根目录：
-    magpie-bridge/sdk-java/
+    magpie/sdk-java/
 
 ### Python SDK
 
@@ -105,11 +105,11 @@ SDK 包括 Java、Python、Dart 等多个语言版本，
     name='magpie-bridge'
 
 工程根目录：
-    magpie-bridge/sdk-py/
+    magpie/sdk-py/
 
 代码目录：
-    magpie-bridge/sdk-py/magpie_bridge/protocol/
-    magpie-bridge/sdk-py/magpie_bridge/magpie/
+    magpie/sdk-py/magpie_bridge/protocol/
+    magpie/sdk-py/magpie_bridge/magpie/
 
 协议定义相关的代码放在 protocol/ 目录下，工具类代码放在 magpie/ 下。
 
@@ -122,4 +122,4 @@ SDK 包括 Java、Python、Dart 等多个语言版本，
     name: magpie-bridge
 
 工程根目录：
-    magpie-bridge/sdk-dart/
+    magpie/sdk-dart/
