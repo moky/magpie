@@ -73,7 +73,7 @@ classDiagram
 | flagDsn | 序列号标志位，0 或 1 |
 | extLen | 额外参数长度：解包时 `E = type & 0x07`（允许 0~4）；打包时仅取 0/2/4 |
 | headerLength | 协议头长度，8 - 32 |
-| payloadLength | 载荷长度，0 - 1024 |
+| payloadLength | 载荷长度，0 - 1024（**发送端构造约束**；解析端不以此拒绝，只校验 MSS） |
 
 扩展方法：
 

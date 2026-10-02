@@ -71,8 +71,10 @@ B=0，即协议头不含 bid 字段，表示直接发送，无需服务器 relay
 
 ```mermaid
 flowchart TD
-    RX[服务器收到数据包] --> CHK{协议头校验}
-    CHK -- "失败" --> DROP[丢弃]
+    RX[服务器收到数据包] --> BC{"来源为广播/多播?"}
+    BC -- "是" --> DROP[丢弃<br/>防放大攻击]
+    BC -- "否" --> CHK{协议头校验}
+    CHK -- "失败" --> DROP
     CHK -- "通过" --> BID{"B=1?<br/>桥接包"}
     BID -- "否" --> DROP
     BID -- "是" --> TGT{"target = 0?"}
