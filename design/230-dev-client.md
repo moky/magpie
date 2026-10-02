@@ -48,6 +48,8 @@ mid = (sn << 32) | index
 
 ## 工程目录
 
+> 其中 Dart 版客户端为 Flutter 样板工程。
+
 ### Java 版客户端
 
 工程根目录：

@@ -272,6 +272,5 @@ Command 本质为 32 位无符号整数，取值范围 1 ~ 4294967295；除系�
 | 6 | 实际长度不符 | 实际数据包长度 ≠ header_length + payload_length | 2.2.3 节 |
 | 7 | 分包下标越界 | E>0 时 `index >= count`（须满足 `0 <= index < count`） | 2.3 节 |
 | 8 | command 为空 | C=1 且 command = 0 | 第 4 节 |
-| 9 | bid 组合非法 | source bid = 0 且 target bid ≠ 0（source=0 仅出现于第一次握手，此时 target 必须为 0） | server.md |
 
 > 本清单为协议层的量化验收标准：服务端实现（见 server.md 预处理线程校验明细）与 SDK 解析器（见 sdk.md）均须据此判定错误包；错误包一律丢弃，不做任何后续处理。

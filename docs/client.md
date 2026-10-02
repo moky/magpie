@@ -77,6 +77,8 @@ flowchart TD
 
 ## 4. 工程目录
 
+> 其中 Dart 版客户端为 Flutter 样板工程。
+
 | 语言 | 工程根目录 |
 |------|-----------|
 | Java 版客户端 | `magpie/tests-java/` |

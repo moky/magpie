@@ -19,6 +19,7 @@
 	- Type、header length、payload length，以及相互关系；
 	- 将实际数据包的长度与根据上面各字段计算得到的值进行比较；
 	- 不需要校验 command 具体值；
+	- source bid = 0 且 target bid ≠ 0 属于服务端上行校验规则（客户端不得伪造服务器下发包），判定后直接丢弃；
 2. **管理线程**需要检查 command 及 source bid：
 	- 如果 command 是 "SYN?"，则为第一次握手（唯一允许 source bid 无内存记录的场景）：source bid 非 0 时一律走预订流程（无论来源是否 loopback，先检查是否合法且未被占用，失败则回复 "FAIL" 指令包）；source bid 为 0 时，loopback 来源按内定规则分配 bid = port，其余来源分配新 bid；
 	- 否则 source bid 必须跟内存记录（socket 信息）匹配，然后根据 command 值进行相应的处理和应答；
@@ -43,7 +44,7 @@ bid (32位无符号整数) 由高 16 位无符号整数 H 和低 16 位无符号
 5. 检查内存中的分配表，如果 bid 冲突，回到步骤 2 重试；
 6. 重试达到 M 次仍然冲突，表示服务器已满，暂时无法分配 bid，由管理线程回复 "FAIL" 指令包。
 
-> 其中常量 M = 16
+> 其中常量 M 默认 = 16（可通过配置文件 bid_allocation_retries 调整）
 > 自动分配范围：服务器自动分配 bid 时，H 仅在 1 ~ 32767 范围内循环，即不会自动分配 H ≥ 32768 的 bid；该预留区间（H ≥ 32768）仅可能由客户端预订产生（见“内定与预订机制”）。
 
 ### 冲突判定
@@ -90,12 +91,12 @@ bid (32位无符号整数) 由高 16 位无符号整数 H 和低 16 位无符号
 > 每次新建分配记录时，都需要同时建立两个索引（分别以 bid、socket 信息为 key）指向该记录，以方便后面查询。
 
 管理线程空闲时，调用 purge(now) 函数删除所有 ```last_time < now - expires``` 的记录（同时删除对应的 bid 和 socket 信息索引）以回收其所占用的 bid。
-> 其中回收时效为 24 小时： expires = 3600 * 24
+> 回收时效默认 24 小时（expires = 3600 * 24，秒），可通过配置文件 record_expires 调整；
 
-即该 socket 超过 24 小时没有上行数据便可以判定过期并回收；
-另 purge(now) 每次调用间隔不小于 10分钟。
+即该 socket 超过回收时效（默认 24 小时）没有上行数据便可以判定过期并回收；
+另 purge(now) 调用间隔默认不小于 10 分钟（600 秒），可通过配置文件 record_recycle_interval 调整。
 
-> 注：“在线”判定窗口 T（见工作流文档，一般小于 2 分钟）与回收时效 expires（24 小时）是两个不同的参数：T 用于转发线程判断记录是否活跃（在线），expires 用于管理线程回收超时记录。
+> 注：“在线”判定窗口 T（见工作流文档，默认 2 分钟，可通过配置文件 record_active_timeout 调整）与回收时效 expires（默认 24 小时，可通过配置文件 record_expires 调整）是两个不同的参数：T 用于转发线程判断记录是否活跃（在线），expires 用于管理线程回收超时记录。
 
 ### 内定与预订机制
 
@@ -135,10 +136,65 @@ bid (32位无符号整数) 由高 16 位无符号整数 H 和低 16 位无符号
 
 命令行均为命名参数，全部可选：
 
-    magpie-bridge [--host H] [--port P] [--forwarders W]
+    magpie-bridge [--config=<FILE>] [--log-dir=/tmp]    (Python 版命令)
+    java -jar magpie-bridge.jar [--config=<FILE>] [--log-dir=/tmp]   (Java 版入口)
 
-- --host：绑定地址，默认 0.0.0.0（监听所有网卡）；
-- --port：UDP 监听端口，默认 9527；
-- --forwarders：转发线程数 W，默认 8。
+- --config     配置文件路径（缺省尝试默认路径，见下；两版均支持）
+- --log-dir    日志目录（默认为空，不写文件；两版均支持）
 
 未知参数会打印用法提示并退出。
+
+### 配置文件
+
+默认路径： /etc/magpie/config.ini
+
+> 未通过 --config 指定时尝试读取默认路径；文件不存在、段或键缺失时，一律回退到代码默认值。
+
+默认配置：
+
+```
+[magpie-bridge]
+host = 0.0.0.0
+port = 9527
+
+# UDP receive buffer size of the kernel socket (bytes, default:
+# 4194304 = 4 MB; the kernel may clamp it to the system rmem_max)
+socket_buffer_size = 4194304
+
+# threads: forwarder thread count W (default: 8)
+forwarders = 8
+# forwarder rate limit: max packets processed per window (default: 1024)
+forward_limit_per_window = 1024
+# forwarder rate limit window (seconds, default: 0.1)
+forward_window = 0.1
+
+# record lifecycle: a bid record is recycled when it has no uplink
+# traffic for longer than this (seconds, default: 86400.0 = 24 hours)
+record_expires = 86400.0
+# minimum interval between two purge(now) runs (seconds, default:
+# 600.0 = 10 minutes)
+record_recycle_interval = 600.0
+# online judging window: the forwarder drops the target when its
+# record has been inactive for longer than this (seconds, default:
+# 120.0 = 2 minutes)
+record_active_timeout = 120.0
+# bid allocation retries: treat the server as full after M conflicts
+# (default: 16)
+bid_allocation_retries = 16
+
+# waiting queue capacity: receiver -> preprocessor (default: 4096)
+waiting_queue_size = 4096
+# manager queue capacity: preprocessor -> manager (default: 1024)
+manager_queue_size = 1024
+# forwarder queue capacity: preprocessor -> forwarder, per forward
+# thread (default: 8192; when full the packet is dropped and logged,
+# the client retries it via the reliable transport)
+forwarder_queue_size = 8192
+```
+
+**规则说明**：
+
+1. 所有时间值均为**浮点数的秒**（如 0.1 秒），代码内部自行转换为毫秒等内部单位；
+2. 容量类参数（waiting_queue_size、manager_queue_size、forwarder_queue_size、socket_buffer_size）均为整数：前三者是包数，后者是字节数；
+3. 除 host、port、forwarders 外，其余键缺失、段缺失或文件缺失时均回退到代码默认值；
+4. 命令行 --config 指定的路径优先于默认路径；配置文件不存在时不报错，直接使用全部默认值。
