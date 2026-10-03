@@ -1,190 +1,215 @@
-# Magpie Bridge Workflow（工作流设计）
+# Magpie Workflow 工作流设计
 
-> 主要角色：**客户端（A/B）** 与 **转发服务器（S）**。可直连则直连，否则经服务器转发；转发服务器彼此独立，客户端按连通速度自行选择。
+主要角色分**客户端**和**转发服务器**两种。
 
-## 1. 握手机制（搭桥，建立连接）
+如果两个客户端 A 和 B 可以直连，则优先考虑直接发送，否则通过服务器 S 转发。
 
-客户端向服务器申请 bid（Bridge ID，门牌号）；直连双方无需 bid，但仍需握手建立“连接”。
+转发服务器彼此独立，它们都是独立的个体，客户端根据连通速度自行选择转发服务器。
 
-|        | Flags               | Command | SN |
-|--------|---------------------|---------|-----|
-| 第 1 次 | A=0, C=1, D=0, E=0  | "SYN?"  | -   |
-| 第 2 次 | A=1, C=1, D=0, E=0  | "SYN!"  | -   |
-| 第 3 次 | A=1, C=1, D=0, E=0  | "ACK!"  | -   |
-| 失败    | A=1, C=1, D=0, E=0  | "FAIL"  | -   |
+> **应答配对规则**：
+> - 系统指令（D=0）不携带 sn，应答靠 socket 配对：从哪个 socket 收到请求，就回哪个 socket；source bid 不决定应答发给谁，仅用于身份校验（验证 bid 与 socket 的绑定关系）。发送方无需维护等待应答的队列。
+> - 对于数据包（D=1）：直连（B=0）收件人即对方 socket；桥接（B=1）收件人由 target bid 指定；"COPY" 应答均靠 sn 配对。
 
-> 失败行：服务器 bid 分配失败（预订被占用/非法、内定冲突、服务器已满）时以 "FAIL" 应答，由客户端自行决定重新申请或放弃。
+## 握手机制（搭桥，建立连接）
 
-> "FAIL" 的载荷区分两种失败：bid 分配失败时载荷为空，客户端重新申请或放弃；连接未确认（漏发第三次握手 "ACK!"）时载荷为 socket 信息 `{"UDP":"ip:port"}`（与 "SYN!" 相同，该 FAIL 除 command 外与 "SYN!" 字段一致：target=bid、source=0、无 sn/分包参数），客户端可直接补发 "ACK!"（幂等），无需重新握手。
+客户端需要先向服务器申请 bid（Bridge ID，门牌号），此后其他客户端才能根据 bid 请求服务器协助转发数据包。
 
-> 系统指令（D=0）不携带 sn，应答靠 socket 配对：从哪个 socket 收到请求，就回哪个 socket；source bid 不决定应答发给谁，仅用于身份校验（验证 bid 与 socket 的绑定关系）。发送方无需维护等待应答的队列。
->
-> 数据包（D=1）不同：直连（B=0）收件人即对方 socket；桥接（B=1）收件人由 target bid 指定；"COPY" 应答均靠 sn 配对。
+客户端与客户端直连则不需要 bid，但仍需要握手过程来建立"连接"。
 
-### 1.1. 客户端 → 服务器（C-S 握手）
+整个握手过程分 3 步：
 
-```mermaid
-sequenceDiagram
-    participant A as 客户端 A
-    participant S as 服务器 S
+|        | Flags              | Command | SN  |
+|--------|--------------------|---------|-----|
+| 第 1 次 | A=0, C=1, D=0, E=0 | "SYN?"  | -   |
+| 第 2 次 | A=1, C=1, D=0, E=0 | "SYN!"  | -   |
+| 第 3 次 | A=1, C=1, D=0, E=0 | "ACK!"  | -   |
+| 失败    | A=1, C=1, D=0, E=0 | "FAIL"  | -   |
 
-    A->>S: SYN? (target=0, source=0 或预订 bid)
-    Note over A: 进入 SYN_SENT
-    S-->>A: SYN! (target=新 bid, source=0, 可附 socket 信息)
-    Note over S: 进入 SYN_RCVD
-    A->>S: ACK! (target=0, source=新 bid)
-    Note over A,S: 进入 ESTABLISHED
-```
+> 失败行：服务器 bid 分配失败（预订被占用/非法、内定冲突、服务器已满）时，以 "FAIL" 应答，由客户端自行决定重新申请或放弃。
+> 注：B=1 表示与服务器握手；客户端直连握手时 B=0（见下文）。
 
-1. **第一次握手**：客户端发送 "SYN?"（target=0，source 一般为 0，可用预订机制预设期望 bid），进入 SYN_SENT；
-2. **第二次握手**：服务器分配 bid 成功后回复 "SYN!"（target=新 bid，source=0，可附 socket 信息），进入 SYN_RCVD；分配失败（预订被占用/非法、内定冲突、服务器已满）回复 "FAIL"；
-3. **第三次握手**：客户端发送 "ACK!"（target=0，source=刚收到的 bid），服务器验证无误后将 bid 与 socket 一起指派给转发线程，双方进入 ESTABLISHED。
-
-> 服务器回复 "SYN!" 时可附带客户端 socket 信息，例如载荷内容 `{"UDP":"12.34.56.78:12345"}`。
-
-### 1.2. 客户端 → 客户端（C-C 直连握手）
-
-```mermaid
-sequenceDiagram
-    participant A as 客户端 A
-    participant B as 客户端 B
-
-    A->>B: SYN? (B=0, 无 bid 字段)
-    Note over A: 进入 SYN_SENT
-    B-->>A: SYN! (B=0)
-    Note over B: 进入 SYN_RCVD
-    A->>B: ACK! (B=0)
-    Note over A,B: 进入 ESTABLISHED
-```
-
-B=0，即协议头不含 bid 字段，表示直接发送，无需服务器 relay。
-
-> A 收到 "SYN!" 并发出 "ACK!" 后，即可在本地标注连接已建立（建立一条“有向管道”）；B 收到 "ACK!" 时同样标注。双方各管理一条单向“连接”。
-
-### 1.3. 关于 bid
-
-- 服务器即“桥”（bridge），bid 是客户端首次连接时分配的整数（门牌号）；
-- 客户端把 bid 广播出去，其他用户发送数据时在 target bid 位置填上号码，服务器从注册表找到对应 socket 转发；
-- **target=0**：服务器认为包是发给自己的（一般用于握手/挥手/心跳）；
-- **source=0**：只可能是服务器下发的包；客户端经服务器转发时必须填自己的 bid，否则无法生成自动应答；
-- 服务器收到 target/source 全不为 0 的包才认为是待转发包，两个 bid 都必须与记录匹配，匹配则原样转发（不做任何改动）。
-
-```mermaid
-flowchart TD
-    RX[服务器收到数据包] --> BC{"来源为广播/多播?"}
-    BC -- "是" --> DROP[丢弃<br/>防放大攻击]
-    BC -- "否" --> CHK{协议头校验}
-    CHK -- "失败" --> DROP
-    CHK -- "通过" --> BID{"B=1?<br/>桥接包"}
-    BID -- "否" --> DROP
-    BID -- "是" --> TGT{"target = 0?"}
-    TGT -- "是（发给服务器）" --> MGMT[交给管理线程<br/>检查 source、command 等]
-    TGT -- "否（待转发）" --> SRC{"source 匹配<br/>当前 socket?"}
-    SRC -- "否" --> DROP
-    SRC -- "是" --> FWD[指派给转发线程转发]
-```
-
-## 2. 挥手机制（关闭连接）
-
-|        | Flags               | Command | SN |
-|--------|---------------------|---------|-----|
-| 第 1 次 | A=0, C=1, D=0, E=0  | "FIN?"  | -   |
-| 第 2 次 | A=1, C=1, D=0, E=0  | "FIN!"  | -   |
-
-```mermaid
-sequenceDiagram
-    participant A as 客户端 A（主动关闭方）
-    participant S as 服务器 S / 客户端 B
-
-    A->>S: FIN? (target=0, source=本机 bid)
-    Note over A: 进入 FIN_WAIT
-    S-->>A: FIN! (应答)
-    Note over S: 删除记录，释放 bid
-    A->>A: 收到应答后直接关闭
-```
-
-- 单条有向管道的挥手只有 2 步（FIN? / FIN!），直接关闭；
-- C-C 场景存在两条“有向管道”，每条由发起方主动 FIN 后直接关闭，另一侧被动关闭后接着主动发起反方向管道的关闭流程，总体上与 TCP 4 次挥手相当。
-
-## 3. 发送机制
-
-发送途径有两种：**通过服务器转发** 与 **直接发送**。
-
-### 3.1. 通过服务器转发
-
-|   | Flags               | Command | SN   | Index, Count |
-|---|---------------------|---------|-------|--------------|
-| 1 | A=0, B=1, C=0, D=1  | -       | 自增值 | 实际分包信息   |
-| 1 | A=0, B=1, C=1, D=1  | "DATA"  | 自增值 | 实际分包信息   |
-
-1. 双方先在服务器注册 bid；
-2. 发送方 A 将双方 bid 填入协议头相应位置，发给服务器 S；
-3. S 检查 target bid 是否存在且**活跃**（规定时间 T 内有上行数据包；T 为“在线”判定窗口，一般小于 2 分钟，与超时回收时效 expires 无关），同时检查 source bid 与当前 socket 是否匹配，通过后原样转发（发送方的活跃时间已在预处理阶段更新）；连接未确认（漏发 "ACK!"，尚未 ESTABLISHED）时不予转发：转发线程检查 source bid 时发现连接未建立，即以 "FAIL"（载荷带与 "SYN!" 相同的 socket 信息）通知客户端并丢弃该包；
-4. 服务器转发时不回复应答包，发送方通过接收方自动回复的 "COPY" 确认收到。
-
-### 3.2. 直接发送
-
-|   | Flags               | Command | SN   | Index, Count |
-|---|---------------------|---------|-------|--------------|
-| 2 | A=0, B=0, C=0, D=1  | -       | 自增值 | 实际分包信息   |
-| 2 | A=0, B=0, C=1, D=1  | "DATA"  | 自增值 | 实际分包信息   |
-
-双方建立“连接”后直接打包发送给对方（B=0，无 bid 字段）。
-
-## 4. 应答机制
-
-客户端收到普通数据包（A=0, D=1，command 为 "DATA" 或无 command）时，均需回复数据应答包 "COPY"（A=1, D=1，回填源 sn 及 index/count）。
-
-系统指令（D=0）不回复 "COPY"，而是回复各自的专用应答（SYN!/PONG/FIN!，失败场景回复 "FAIL"）。
-
-|   | Flags               | Command | SN   | Index, Count |
-|---|---------------------|---------|-------|--------------|
-| 1 | A=1, B=1, C=1, D=1  | "COPY"  | 源值  | 源分包信息     |
-| 2 | A=1, B=0, C=1, D=1  | "COPY"  | 源值  | 源分包信息     |
-
-**参数设置**：
-
-1. 将 type 最高位 A 置 1：`type = type | 0x80`，表示应答；
-2. 若 B=1（经服务器转发），将 target 和 source 对调，发回同一个服务器中转；
-3. 令 C=1：`type = type | 0x20`，command 字段设为 "COPY"；
-4. 若 D=1，sn 和可能存在的 index, count 均保持不变；
-5. 标志位 B/D/E 不变；
-6. 载荷为空，也可携带自定义信息。
+### 客户端 to 服务器
 
 ```mermaid
 sequenceDiagram
     participant A as 客户端 A
     participant S as 服务器 S
-    participant B as 客户端 B
 
-    A->>S: DATA (target=B, source=A, sn, index, count)
-    S->>B: 原样转发
-    B->>S: COPY (target=A, source=B, 回填 sn/index/count)
-    S->>A: 原样转发
-    Note over A: 收到 COPY，标记"已接收"
-```
-
-## 5. 心跳机制（保活）
-
-客户端定期检查自身发送时间，超过预设时间无任何数据包发送（含应答包），则主动发送“心跳”包维持连接状态。
-
-|   | Flags               | Command | SN |
-|---|---------------------|---------|-----|
-| 1 | A=0, C=1, D=0, E=0  | "PING"  | -   |
-| 2 | A=1, C=1, D=0, E=0  | "PONG"  | -   |
-
-```mermaid
-sequenceDiagram
-    participant C as 客户端
-    participant S as 服务器 S / 对端客户端
-
-    loop 超时未发送任何数据
-        C->>S: PING (target=0, source=本机 bid)
-        S-->>C: PONG
-        Note over S: 更新活跃时间
+    Note over A: SYN_SENT
+    A->>S: "SYN?" (A=0, target=0, source=0/预订bid)
+    alt 分配成功
+        Note over S: SYN_RCVD
+        S-->>A: "SYN!" (A=1, target=x, source=0)<br/>载荷可选携带 socket 信息 {"UDP":"ip:port"}
+        A->>S: "ACK!" (A=1, target=0, source=x)
+        Note over A, S: ESTABLISHED<br/>服务器标记记录 acknowledged
+    else 分配失败（预订被占用/非法、内定冲突、服务器已满）
+        S-->>A: "FAIL" (A=1, target=期望/已分配bid, source=0)
+        Note over A: 客户端自行决定重新申请或放弃
     end
 ```
 
-- 心跳包发给服务器时 B=1（target=0, source=本机 bid）；直连时 B=0；
-- 服务器无需主动发起心跳，C-S 结构的连接状态由客户端负责维护；
-- 直连场景为两条“有向管道”，各自由发起方负责主动维护。
+1. **第一次握手**：客户端发送 "SYN?" 报文，表示想建立连接，此时 target bid 为 0，source bid 一般为 0（若使用预订机制，可预设期望的 bid），客户端进入 SYN_SENT 状态。
+
+2. **第二次握手**：服务器收到后回复 "SYN!" 报文（即 TCP 语境下的 SYN+ACK），target bid 为服务器按生成规则为 socket 分配的整数 x，source bid 为 0（表示来自服务器），服务器进入 SYN_RCVD 状态；若 bid 分配失败（预订被占用/非法、内定冲突、服务器已满），则回复 "FAIL" 指令包，客户端可重新申请或放弃。
+
+3. **第三次握手**：客户端收到后发送 "ACK!" 报文，target bid 为 0（表示发给服务器），source bid 为刚收到的整数 x，服务器验证无误后标记该记录为已确认（acknowledged，连接建立），双方进入 ESTABLISHED 状态，此后转发线程方可转发其数据包。
+
+> 备注：当服务器回复 "SYN!" 的时候，可以同时附带客户端 socket 信息。比如载荷内容：`{"UDP":"12.34.56.78:12345"}`，载荷长度 `payload_length = len(payload)`。
+
+### 客户端 to 客户端
+
+B=0，即协议头不含 bid 字段，表示直接发送，无需服务器 relay。
+
+```mermaid
+sequenceDiagram
+    participant A as 客户端 A
+    participant B as 客户端 B
+
+    Note over A: SYN_SENT
+    A->>B: "SYN?" (B=0)
+    Note over B: SYN_RCVD
+    B-->>A: "SYN!" (B=0)
+    A->>B: "ACK!" (B=0)
+    Note over A, B: ESTABLISHED<br/>双方各管理一条"有向管道"
+```
+
+1. **第一次握手**：客户端 A 发送 "SYN?" 报文，表示想建立连接，A 进入 SYN_SENT 状态。
+
+2. **第二次握手**：客户端 B 收到后回复 "SYN!" 报文，B 进入 SYN_RCVD 状态。
+
+3. **第三次握手**：A 收到后发送 "ACK!" 报文，双方进入 ESTABLISHED 状态，连接正式建立。
+
+> 备注：当 A 收到 "SYN!" 并发送完 "ACK!" 时，即可在本地标注连接已建立（意味着建立了一条"有向管道"），而在 B 收到这个 "ACK!" 时，也在本地标注连接已建立，因此相当于双方各管理一个单向"连接"。
+
+### 关于 bid
+
+首先，服务器就是一个"桥"bridge，起到帮助两个不能直接连接的设备（比如一个在内网）转发数据包的作用，而 bid 就是客户端首次连接服务器时分配的一个整数（相当于门牌号）。
+
+客户端申请到这个号码之后，需要通过其他方式广播出去，其他用户需要发送数据时，只需要将数据打包发给服务器，并在 target bid 位置填上相应的号码，服务器就会从注册表中找到对应的 socket 并转发。
+
+- 如果 target bid 为 0，则服务器会认为这是发送给自己的（一般用于"握手"或"挥手"过程）；
+- B 通过服务器给 A 发送数据包时，必须先申请到自己的 bid，并将它放到 source bid 位置，这样 A 才能知道是谁发给它的（用于生成自动应答包以便服务器和发送方 B 确认已收到），如果不填则会被认为是来自服务器的数据包（0 为服务器的保留值）；
+- source bid 为 0 时只可能是服务器下发的包，不可能是另一个客户端 B 请它转发的包，因为如果 B 向服务器发送的包 source bid 为 0 而 target bid 不为 0，会被服务器判定为上行校验违规而直接丢弃；只要 B 填写的 source bid 和服务器的记录对不上（通过 bid 查询记录再比对 socket 信息）也会被丢弃；
+- 服务器收到 target / source bid 全不为 0 的包之后，才会认为是需要转发的包，此时服务器会分别查询这两个 bid 是否正确，不正确直接丢弃，正确的话就会原样转发到 target bid 所对应的 socket（不会做任何改动）。
+
+## 挥手机制（关闭连接）
+
+虽然以上建立的"连接"是有超时机制判断存活状态的，但仍然可以通过主动挥手的方式直接关闭连接。
+
+|        | Flags              | Command | SN  |
+|--------|--------------------|---------|-----|
+| 第 1 次 | A=0, C=1, D=0, E=0 | "FIN?"  | -   |
+| 第 2 次 | A=1, C=1, D=0, E=0 | "FIN!"  | -   |
+
+> 注：B=1 表示向服务器挥手（断开连接）；客户端直连的挥手 B=0。
+
+```mermaid
+sequenceDiagram
+    participant A as 客户端 A
+    participant B as 服务器 S / 客户端 B
+
+    Note over A: FIN_WAIT
+    A->>B: "FIN?" (主动关闭本侧管道)
+    B-->>A: "FIN!" (挥手应答)
+    B->>B: 直接关闭该管道
+    Note over A: 收到 "FIN!"（或等待 2MSL 未收到）后直接关闭
+```
+
+单条有向管道的挥手只有 2 步（FIN? / FIN!），直接关闭（不同于 TCP 单连接 4 步）：
+
+1. **主动关闭**：客户端 A 数据发完后，发送一个 "FIN?" 报文给服务器 S（或客户端 B），表示"我数据发完了，现在关闭我这一侧的连接"，A 进入 FIN_WAIT 状态；
+2. **被动关闭**：服务器 S（或客户端 B）收到后，先回复一个 "FIN!" 报文（挥手应答），表示"我知道你要关闭了"，然后直接关闭；
+3. A 收到这个 "FIN!" 之后（或者等待 2MSL 之后仍然未收到）则直接关闭。
+
+> 备注：由于"客户端 to 客户端"的情况下，实际上是同时存在两条"连接"（在此称之为"有向管道"），所以每条连接都是发起方主动发送 "FIN?" 之后就可以直接关闭了，而另一侧在收到 "FIN?" 并被动关闭这条管道之后，接着会主动发起另一个方向上的管道关闭流程，总体上来说也跟 TCP 的 4 次挥手差不多。
+
+## 发送机制
+
+发送途径有两种：直接发送和通过服务器转发。
+
+### 通过服务器转发
+
+|   | Flags              | Command | SN    | Index, Count |
+|---|--------------------|---------|-------|--------------|
+| 1 | A=0, B=1, C=0, D=1 | -       | 自增值 | 实际分包信息   |
+| 1 | A=0, B=1, C=1, D=1 | "DATA"  | 自增值 | 实际分包信息   |
+
+首先，两个客户端 A 和 B 都必须先在同一个服务器 S 上注册 bid。
+然后发送方 A 将双方的 bid 填写进协议头部相应位置，然后将数据发送给服务器 S。
+
+```mermaid
+sequenceDiagram
+    participant A as 客户端 A
+    participant S as 服务器 S
+    participant B as 客户端 B
+
+    A->>S: 数据包 (target=B, source=A, sn, [index,count])
+    Note over S: 校验 source bid 匹配、target bid 活跃
+    S->>B: 原样转发 (target=B, source=A)
+    B-->>S: "COPY" 应答 (target=A, source=B, sn 回填)
+    S-->>A: 原样转发应答
+    Note over A: 发送队列中 sn 匹配的任务被移除
+```
+
+S 检查 target bid 是否存在相应的 socket，以及是否活跃（规定时间 T_active 内有上行数据包；T_active 为"在线"判定窗口，一般小于 2 分钟，与超时回收时效 expires 无关），同时还要检查 source bid 跟当前 socket 是否匹配，检查通过后将该数据包原样转发（发送方的活跃时间已在预处理阶段更新）。
+
+连接未确认（客户端收到 "SYN!" 后未回 "ACK!"，尚未 ESTABLISHED）时数据包不予转发：转发线程检查 source bid 时发现连接未建立，即以 "FAIL"（载荷带与 "SYN!" 相同的 socket 信息）通知客户端并丢弃该包。
+
+> 备注：服务器协助转发数据包时无需向发送方回复应答包，发送方可通过接收方自动回复的应答包确认收到。
+
+### 直接发送
+
+|   | Flags              | Command | SN    | Index, Count |
+|---|--------------------|---------|-------|--------------|
+| 2 | A=0, B=0, C=0, D=1 | -       | 自增值 | 实际分包信息   |
+| 2 | A=0, B=0, C=1, D=1 | "DATA"  | 自增值 | 实际分包信息   |
+
+两个客户端 A 和 B 通过前面的握手机制建立"连接"之后，直接将数据打包发送给对方即可（B=0, 无 bid 字段）。
+
+## 应答机制
+
+当客户端收到普通数据包（A=0, D=1，command 为 "DATA" 或无 command）时，均需要回复数据应答包 "COPY"（A=1, D=1，回填源 sn 及 index/count）。
+系统指令（D=0）不回复 "COPY"，而是回复各自的专用应答（SYN!/PONG/FIN!，失败场景回复 "FAIL"），见上文各机制。
+
+"FAIL" 的载荷区分两种失败：
+
+- **bid 分配失败**（预订被占用/非法、内定冲突、服务器已满）：载荷为空，客户端重新申请或放弃；
+- **连接未确认**（客户端漏发第三次握手 "ACK!"）：载荷为 socket 信息 `{"UDP":"ip:port"}`（与 "SYN!" 相同），客户端可直接补发 "ACK!"（幂等），无需重新握手。该 FAIL 除 command 外与 "SYN!" 各字段一致（target=bid、source=0、无 sn 及分包参数）。
+
+|   | Flags              | Command | SN    | Index, Count |
+|---|--------------------|---------|-------|--------------|
+| 1 | A=1, B=1, C=1, D=1 | "COPY"  | 源值  | 源分包信息     |
+| 2 | A=1, B=0, C=1, D=1 | "COPY"  | 源值  | 源分包信息     |
+
+COPY 参数设置如下：
+
+1. 将 type 最高位 A 设为 1（`type = type | 0x80`），表示应答；
+2. 如果 B=1，说明是通过服务器转发的包，则将 target 和 source 对调（发回给同一个服务器中转）；
+3. 令 C=1（`type = type | 0x20`），然后将 command 字段设置为 "COPY"；
+4. 如果 D=1，则 sn 和可能存在的 index, count 均保持不变；
+5. 标志位 B/D/E 不变；
+6. 载荷为空，也可携带自定义信息。
+
+## 心跳机制（保活）
+
+客户端定期检查自身的收发时间，如果超过预设时间没有任何数据包收/发（包括应答数据包），则需要主动发送一个"心跳"包以维持"连接"状态。
+
+|   | Flags              | Command | SN  |
+|---|--------------------|---------|-----|
+| 1 | A=0, C=1, D=0, E=0 | "PING"  | -   |
+| 2 | A=1, C=1, D=0, E=0 | "PONG"  | -   |
+
+```mermaid
+sequenceDiagram
+    participant A as 客户端 A
+    participant B as 服务器 S / 客户端 B
+
+    Note over A: 距最后收/发数据超过 H=10s
+    A->>B: "PING" (D=0, 直接发送不入队)
+    B-->>A: "PONG" (D=0)
+    Note over A: "PONG" 丢失不影响保活<br/>（保活靠上行 PING 本身）
+```
+
+> 备注：心跳包发给服务器时 B=1（target=0, source=本机 bid）；客户端直连时 B=0。
+> 服务器无需主动发起心跳，C-S 结构的连接状态由客户端负责维护；
+> 如果是客户端直连的情况，它们之间的通讯被设计成两条"有向管道"，所以也是发起方负责主动维护，而另一个方向上的管道连接状态则由对方负责主动维护。

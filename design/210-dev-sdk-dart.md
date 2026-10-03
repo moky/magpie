@@ -549,12 +549,14 @@ final class MessageParser implements MagpieParser {
 	    // 1. 前 8 个字节的有效性检查
 	    //    检查 Magic Code；
 	    //    读出 flags（bid = (type >> 6) & 0x01），检查 E 合法性：E = type & 0x07（低 3 位，bit 3 不检查）；
+	    //    E 只允许 0~4，取值 5/6/7 判定为错误包；
 	    //    检查约束：E>0 时 D 必须为 1（D=0 且 E>0 判定为错误包）；
 	    //    读出 headerLength 和 payloadLength，然后与 flags 一起计算检查头长度合法性；
 	    
 	    // 2. 头参数的有效性检查
 	    //    根据 flags 指示依次读出 target, source, sn, index, count, command 等参数；
 	    //    检查各项参数是否越界；
+	    //    若 C=1，则 command 必须非 0（全 0 判定为错误包）；不校验 command 的具体取值（是否系统指令由上层判断）；
 	    
 	    // 3. 读取 payload，然后创建消息包对象
 	    

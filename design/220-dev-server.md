@@ -18,7 +18,7 @@
 	- Magic Code
 	- Type、header length、payload length，以及相互关系；
 	- 将实际数据包的长度与根据上面各字段计算得到的值进行比较；
-	- 不需要校验 command 具体值；
+	- C=1 时 command 必须非 0（全 0 判定为错误包）；除此之外**不校验 command 的具体取值**，一律放行（具体值是否为系统指令、如何应答，由管理线程按场景处理，客户端自定义 command 亦不受限）；
 	- source bid = 0 且 target bid ≠ 0 属于服务端上行校验规则（客户端不得伪造服务器下发包），判定后直接丢弃；
 2. **管理线程**需要检查 command 及 source bid：
 	- 如果 command 是 "SYN?"，则为第一次握手（唯一允许 source bid 无内存记录的场景）：source bid 非 0 时一律走预订流程（无论来源是否 loopback，先检查是否合法且未被占用，失败则回复 "FAIL" 指令包）；source bid 为 0 时，loopback 来源按内定规则分配 bid = port，其余来源分配新 bid；
@@ -96,7 +96,7 @@ bid (32位无符号整数) 由高 16 位无符号整数 H 和低 16 位无符号
 即该 socket 超过回收时效（默认 24 小时）没有上行数据便可以判定过期并回收；
 另 purge(now) 调用间隔默认不小于 10 分钟（600 秒），可通过配置文件 record_recycle_interval 调整。
 
-> 注：“在线”判定窗口 T（见工作流文档，默认 2 分钟，可通过配置文件 record_active_timeout 调整）与回收时效 expires（默认 24 小时，可通过配置文件 record_expires 调整）是两个不同的参数：T 用于转发线程判断记录是否活跃（在线），expires 用于管理线程回收超时记录。
+> 注：“在线”判定窗口 T_active（见工作流文档，默认 2 分钟，可通过配置文件 record_active_timeout 调整）与回收时效 expires（默认 24 小时，可通过配置文件 record_expires 调整）是两个不同的参数：T_active 用于转发线程判断记录是否活跃（在线），expires 用于管理线程回收超时记录。
 
 ### 内定与预订机制
 
@@ -196,5 +196,5 @@ forwarder_queue_size = 8192
 
 1. 所有时间值均为**浮点数的秒**（如 0.1 秒），代码内部自行转换为毫秒等内部单位；
 2. 容量类参数（waiting_queue_size、manager_queue_size、forwarder_queue_size、socket_buffer_size）均为整数：前三者是包数，后者是字节数；
-3. 除 host、port、forwarders 外，其余键缺失、段缺失或文件缺失时均回退到代码默认值；
+3. 所有键缺失、段缺失或文件缺失时均回退到代码默认值（host 默认 0.0.0.0、port 默认 9527、forwarders 默认 8，与其余键行为一致）；
 4. 命令行 --config 指定的路径优先于默认路径；配置文件不存在时不报错，直接使用全部默认值。
