@@ -14,11 +14,11 @@
 class MessagePacket implements Magpie {
     MessagePacket(this.buffer, {
         
-        required this.flagAck,
-        required this.flagBid,
-        required this.flagCmd,
-        required this.flagDsn,
-        required this.extLen,
+        required this.ack,
+        required this.bid,
+        required this.cmd,
+        required this.dsn,
+        required this.ext,
          
         required this.headerLength,
         required this.payloadLength,
@@ -39,11 +39,11 @@ class MessagePacket implements Magpie {
     Uint8List? buffer;
     
     /// flags
-    final int flagAck;
-    final int flagBid;
-    final int flagCmd;
-    final int flagDsn;
-    final int extLen;
+    final int ack;
+    final int bid;
+    final int cmd;
+    final int dsn;
+    final int ext;
     
     final int headerLength;
     final int payloadLength;
@@ -83,11 +83,11 @@ class MessagePacket implements Magpie {
 final class BridgePacket extends MessagePacket {
     BridgePacket._(super.buffer, {
         
-        required super.flagAck,
-        // required super.flagBid,
-        required super.flagCmd,
-        required super.flagDsn,
-        required super.extLen,
+        required super.ack,
+        // required super.bid,
+        required super.cmd,
+        required super.dsn,
+        required super.ext,
         
         // required super.headerLength,
         // required super.payloadLength,
@@ -104,20 +104,20 @@ final class BridgePacket extends MessagePacket {
         required super.payload
     }) : super(
         /// 桥接包 B=1
-        flagBid: 1,
+        bid: 1,
             
         /// 计算 headerLength 和 payloadLength
-        headerLength: calcHeaderLength(flagBid: 1, flagCmd: flagCmd, flagDsn: flagDsn, extLen: extLen),
+        headerLength: calcHeaderLength(bid: 1, cmd: cmd, dsn: dsn, ext: ext),
         payloadLength: calcPayloadLength(payload),
     );
     
     factory BridgePacket(Uint8List? buffer, {
         
-        required int flagAck,
-        // required int flagBid,
-        // required int flagCmd,
-        // required int flagDsn,
-        // required int extLen,
+        required int ack,
+        // required int bid,
+        // required int cmd,
+        // required int dsn,
+        // required int ext,
          
         // required int headerLength,
         // required int payloadLength,
@@ -134,11 +134,11 @@ final class BridgePacket extends MessagePacket {
         Uint8List? payload
     }) => BridgePacket._(buffer,
         
-        flagAck: flagAck,
-        // flagBid: 1,
-        flagCmd: calcCmd(command),
-        flagDsn: calcDsn(sn),
-        extLen: calcExt(count),
+        ack: ack,
+        // bid: 1,
+        cmd: calcCmd(command),
+        dsn: calcDsn(sn),
+        ext: calcExt(count),
         
         // headerLength: ...,
         // payloadLength: ...,
@@ -161,11 +161,11 @@ final class BridgePacket extends MessagePacket {
     
     factory BridgePacket.create({
         
-        required int flagAck,
-        // required int flagBid,
-        // required int flagCmd,
-        // required int flagDsn,
-        // required int extLen,
+        required int ack,
+        // required int bid,
+        // required int cmd,
+        // required int dsn,
+        // required int ext,
          
         // required int headerLength,
         // required int payloadLength,
@@ -182,11 +182,11 @@ final class BridgePacket extends MessagePacket {
         Uint8List? payload
     }) => BridgePacket._(null,
         
-        flagAck: flagAck,
-        // flagBid: 1,
-        flagCmd: calcCmd(command),
-        flagDsn: calcDsn(sn),
-        extLen: calcExt(count),
+        ack: ack,
+        // bid: 1,
+        cmd: calcCmd(command),
+        dsn: calcDsn(sn),
+        ext: calcExt(count),
         
         // headerLength: ...,
         // payloadLength: ...,
@@ -209,7 +209,7 @@ final class BridgePacket extends MessagePacket {
     factory BridgePacket.syn(Uint8List? info, {
         int source = 0
     }) => BridgePacket.create(
-        flagAck: 0,
+        ack: 0,
         
         target: 0,  // 这个包是发给服务器的指令，所以这里 target = 0
         source: source,  // 0 = 普通申请；非 0 = 预订 bid
@@ -227,7 +227,7 @@ final class BridgePacket extends MessagePacket {
     factory BridgePacket.synAck(Uint8List? info, {
         required int target,  // 服务器为该客户端分配的 bid
     }) => BridgePacket.create(
-        flagAck: 1,
+        ack: 1,
         
         target: target,
         source: 0,  // 这个包是服务器发给客户端的，所以这里 source = 0
@@ -245,7 +245,7 @@ final class BridgePacket extends MessagePacket {
     factory BridgePacket.ack(Uint8List? info, {
         required int source,  // 从第二次握手包中得到的 target
     }) => BridgePacket.create(
-        flagAck: 1,
+        ack: 1,
         
         target: 0,  // 这个包是发给服务器的指令，所以这里 target = 0
         source: source,
@@ -265,7 +265,7 @@ final class BridgePacket extends MessagePacket {
     factory BridgePacket.fail(Uint8List? info, {
         required int target,  // 客户端 bid（期望或已分配）
     }) => BridgePacket.create(
-        flagAck: 1,
+        ack: 1,
         
         target: target,
         source: 0,  // 这个包是服务器发给客户端的，所以这里 source = 0
@@ -287,7 +287,7 @@ final class BridgePacket extends MessagePacket {
         required int index,
         required int count,
     }) => BridgePacket.create(
-        flagAck: 0,
+        ack: 0,
         
         target: target,
         source: source,
@@ -304,7 +304,7 @@ final class BridgePacket extends MessagePacket {
     /// 数据应答包，通过服务器转发“确认收到”给原发送方
     /// （packet 为收到的数据包；info 为附加信息，默认为空）
     factory BridgePacket.copy(Magpie packet, [Uint8List? info]) => BridgePacket.create(
-        flagAck: 1,
+        ack: 1,
         
         // bid 对调
         target: packet.source,
@@ -324,7 +324,7 @@ final class BridgePacket extends MessagePacket {
     factory BridgePacket.ping(Uint8List? info, {
         required int source,
     }) => BridgePacket.create(
-        flagAck: 0,
+        ack: 0,
         
         target: 0,  // 这个包是发给服务器的指令，所以这里 target = 0
         source: source,
@@ -341,7 +341,7 @@ final class BridgePacket extends MessagePacket {
     /// 心跳应答
     /// （packet 为收到的 ping 包；info 为附加信息，默认为 ping.payload ）
     factory BridgePacket.pong(Magpie packet, [Uint8List? info]) => BridgePacket.create(
-        flagAck: 1,
+        ack: 1,
         
         target: packet.source,
         source: packet.target,  // 0
@@ -359,7 +359,7 @@ final class BridgePacket extends MessagePacket {
     factory BridgePacket.fin(Uint8List? info, {
         required int source,
     }) => BridgePacket.create(
-        flagAck: 0,
+        ack: 0,
         
         target: 0,  // 这个包是发给服务器的指令，所以这里 target = 0
         source: source,
@@ -376,7 +376,7 @@ final class BridgePacket extends MessagePacket {
     /// 第二次挥手
     /// （packet 为收到的 fin 包；info 为附加信息，默认为 fin.payload ）
     factory BridgePacket.finAck(Magpie packet, [Uint8List? info]) => BridgePacket.create(
-        flagAck: 1,
+        ack: 1,
         
         target: packet.source,
         source: packet.target,  // 0
@@ -401,11 +401,11 @@ final class BridgePacket extends MessagePacket {
 final class DirectPacket extends MessagePacket {
     DirectPacket._(super.buffer, {
         
-        required super.flagAck,
-        // required super.flagBid,
-        required super.flagCmd,
-        required super.flagDsn,
-        required super.extLen,
+        required super.ack,
+        // required super.bid,
+        required super.cmd,
+        required super.dsn,
+        required super.ext,
         
         // required super.headerLength,
         // required super.payloadLength,
@@ -422,10 +422,10 @@ final class DirectPacket extends MessagePacket {
         required super.payload
     }) : super(
         /// 直连包 B=0, 无 bid
-        flagBid: 0,
+        bid: 0,
             
         /// 计算 headerLength 和 payloadLength
-        headerLength: calcHeaderLength(flagBid: 0, flagCmd: flagCmd, flagDsn: flagDsn, extLen: extLen),
+        headerLength: calcHeaderLength(bid: 0, cmd: cmd, dsn: dsn, ext: ext),
         payloadLength: calcPayloadLength(payload),
         
         target: 0,
@@ -434,11 +434,11 @@ final class DirectPacket extends MessagePacket {
     
     factory DirectPacket(Uint8List? buffer, {
         
-        required int flagAck,
-        // required int flagBid,
-        // required int flagCmd,
-        // required int flagDsn,
-        // required int extLen,
+        required int ack,
+        // required int bid,
+        // required int cmd,
+        // required int dsn,
+        // required int ext,
          
         // required int headerLength,
         // required int payloadLength,
@@ -454,11 +454,11 @@ final class DirectPacket extends MessagePacket {
         
         Uint8List? payload
     }) => DirectPacket._(buffer,
-        flagAck: flagAck,
-        // flagBid: 0,
-        flagCmd: calcCmd(command),
-        flagDsn: calcDsn(sn),
-        extLen: calcExt(count),
+        ack: ack,
+        // bid: 0,
+        cmd: calcCmd(command),
+        dsn: calcDsn(sn),
+        ext: calcExt(count),
         
         // headerLength: ...,
         // payloadLength: ...,
@@ -487,19 +487,19 @@ final class DirectPacket extends MessagePacket {
 
 ```dart
 static int calcType({
-    required int flagAck,
-    required int flagBid,
-    required int flagCmd,
-    required int flagDsn,
-    required int extLen,
-}) => (flagAck << 7) | (flagBid << 6) | (flagCmd << 5) | (flagDsn << 4) | (extLen & 0x07);
+    required int ack,
+    required int bid,
+    required int cmd,
+    required int dsn,
+    required int ext,
+}) => (ack << 7) | (bid << 6) | (cmd << 5) | (dsn << 4) | (ext & 0x07);
     
 static int calcHeaderLength({
-    required int flagBid,
-    required int flagCmd,
-    required int flagDsn,
-    required int extLen,
-}) => 8 + 8*flagBid + 4*flagDsn + 2*extLen + 4*flagCmd;
+    required int bid,
+    required int cmd,
+    required int dsn,
+    required int ext,
+}) => 8 + 8*bid + 4*dsn + 2*ext + 4*cmd;
     
 static int calcPayloadLength(
     Uint8List? payload
@@ -548,7 +548,7 @@ final class MessageParser implements MagpieParser {
 	    }
 	    // 1. 前 8 个字节的有效性检查
 	    //    检查 Magic Code；
-	    //    读出 flags（flagBid = (type >> 6) & 0x01），检查 E 合法性：E = type & 0x07（低 3 位，bit 3 不检查）；
+	    //    读出 flags（bid = (type >> 6) & 0x01），检查 E 合法性：E = type & 0x07（低 3 位，bit 3 不检查）；
 	    //    E 只允许 0~4，取值 5/6/7 判定为错误包；
 	    //    检查约束：E>0 时 D 必须为 1（D=0 且 E>0 判定为错误包）；
 	    //    读出 headerLength 和 payloadLength，然后与 flags 一起计算检查头长度合法性；
@@ -560,7 +560,7 @@ final class MessageParser implements MagpieParser {
 	    
 	    // 3. 读取 payload，然后创建消息包对象
 	    
-	    if (flagBid == 0) {
+	    if (bid == 0) {
 	        return DirectPacket(buffer, ...);
 	    } else {
 	        return BridgePacket(buffer, ...);

@@ -25,11 +25,11 @@ classDiagram
         +pack() Uint8List
     }
     class MessagePacket {
-        +flagAck : int
-        +flagBid : int
-        +flagCmd : int
-        +flagDsn : int
-        +extLen : int
+        +ack : int
+        +bid : int
+        +cmd : int
+        +dsn : int
+        +ext : int
         +headerLength : int
         +payloadLength : int
         +buffer : Uint8List?
@@ -73,11 +73,11 @@ classDiagram
 
 - 扩展属性（只读）
 	- version      : 协议版本，固定值 "1.0"
-	- flagAck      : 应答标志位，取值范围 0 或 1
-	- flagBid      : 桥接标志位，取值范围 0 或 1
-	- flagCmd      : 命令标志位，取值范围 0 或 1（普通数据包默认取 0）
-	- flagDsn      : 序列号标志位，取值范围 0 或 1
-	- extLen       : 额外参数长度，解包时 E = type & 0x07（低 3 位），允许 0~4；打包时为字节对齐仅取 0/2/4
+	- ack      : 应答标志位，取值范围 0 或 1
+	- bid      : 桥接标志位，取值范围 0 或 1
+	- cmd      : 命令标志位，取值范围 0 或 1（普通数据包默认取 0）
+	- dsn      : 序列号标志位，取值范围 0 或 1
+	- ext       : 额外参数长度，解包时 E = type & 0x07（低 3 位），允许 0~4；打包时为字节对齐仅取 0/2/4
 	- headerLength : 协议头长度，取值范围 8 - 32
 	- payloadLength: 载荷长度，取值范围 0 - 1024（**发送端构造约束**；解析端不以此拒绝，只校验 MSS）
 - 扩展方法
@@ -128,32 +128,32 @@ classDiagram
 
 1. **前 8 个字节的有效性检查**
 	- 检查 Magic Code；
-	- 读出 flags（flagBid = (type >> 6) & 0x01），检查 E 合法性：E = type & 0x07（低 3 位，bit 3 不检查）；E 只允许 0~4，取值 5/6/7 判定为错误包；
+	- 读出 flags（bid = (type >> 6) & 0x01），检查 E 合法性：E = type & 0x07（低 3 位，bit 3 不检查）；E 只允许 0~4，取值 5/6/7 判定为错误包；
 	- 检查约束：E>0 时 D 必须为 1（D=0 且 E>0 判定为错误包）；
 	- 读出 headerLength 和 payloadLength，然后与 flags 一起计算检查头长度合法性；
 2. **头参数的有效性检查**
 	- 根据 flags 指示依次读出 target, source, sn, index, count, command 等参数；
 	- 检查各项参数是否越界；
 	- 若 C=1，则 command 必须非 0（全 0 判定为错误包）；不校验 command 的具体取值（是否系统指令由上层判断）；
-3. **读取 payload，然后创建消息包对象**（flagBid == 0 → DirectPacket，否则 BridgePacket）。
+3. **读取 payload，然后创建消息包对象**（bid == 0 → DirectPacket，否则 BridgePacket）。
 
 ## 计算公式
 
 ```dart
 static int calcType({
-    required int flagAck,
-    required int flagBid,
-    required int flagCmd,
-    required int flagDsn,
-    required int extLen,
-}) => (flagAck << 7) | (flagBid << 6) | (flagCmd << 5) | (flagDsn << 4) | (extLen & 0x07);
+    required int ack,
+    required int bid,
+    required int cmd,
+    required int dsn,
+    required int ext,
+}) => (ack << 7) | (bid << 6) | (cmd << 5) | (dsn << 4) | (ext & 0x07);
 
 static int calcHeaderLength({
-    required int flagBid,
-    required int flagCmd,
-    required int flagDsn,
-    required int extLen,
-}) => 8 + 8*flagBid + 4*flagDsn + 2*extLen + 4*flagCmd;
+    required int bid,
+    required int cmd,
+    required int dsn,
+    required int ext,
+}) => 8 + 8*bid + 4*dsn + 2*ext + 4*cmd;
 
 static int calcPayloadLength(
     Uint8List? payload
