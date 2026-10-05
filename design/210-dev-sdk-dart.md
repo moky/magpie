@@ -1,4 +1,4 @@
-# Magpie SDK (Dart 示例)
+# Magpie Bridge SDK (Dart 示例)
 
 由于 Dart 语言对函数变量、空安全等特性更丰富，所以这里以 Dart 语言举例。
 
@@ -77,7 +77,7 @@ class MessagePacket implements Magpie {
 
 ### 桥接包 BridgePacket
 
-客户端与服务器通讯的消息包，包括委托服务器中转的消息包。
+客户端与服务器通信的消息包，包括委托服务器中转的消息包。
 
 ```dart
 final class BridgePacket extends MessagePacket {
@@ -261,61 +261,81 @@ final class BridgePacket extends MessagePacket {
     
     /// 失败
     /// 1. bid 分配失败：target = 期望的（预订）bid，info 为空；
-    /// 2. 第三次握手包缺失：target = 已分配的 bid，info 为 socket 信息（同 "SYN!"）。
+    /// 2. 第三次握手包缺失：target = 已分配的 bid，info 为 socket 信息（同 "SYN!"）；
+    /// 3. 无法修改通行证： target = 已分配的 bid，info 为失败的 bid 列表。
     factory BridgePacket.fail(Uint8List? info, {
         required int target,  // 客户端 bid（期望或已分配）
+        int sn = 0,
+        int index = 0,
+        int count = 1,
     }) => BridgePacket.create(
         ack: 1,
         
         target: target,
         source: 0,  // 这个包是服务器发给客户端的，所以这里 source = 0
         
-        sn:    0,
-        index: 0,
-        count: 1,
+        sn:    sn,
+        index: index,
+        count: count,
         
         command: Command.FAIL,
         
         payload: info
     );
     
-    /// 普通数据包，通过服务器转发给接收方
-    factory BridgePacket.data(Uint8List data, {
+    /// 成功完成
+    factory BridgePacket.done(Uint8List? info, {
         required int target,
-        required int source,
-        required int sn,
-        required int index,
-        required int count,
+        int sn = 0,
+        int index = 0,
+        int count = 1,
     }) => BridgePacket.create(
-        ack: 0,
+        ack: 1,
         
         target: target,
-        source: source,
+        source: 0,  // 这个包是服务器发给客户端的，所以这里 source = 0
         
         sn:    sn,
         index: index,
         count: count,
         
-        command: 0,  // 为了尽可能控制数据包体积，这里使用空 command 打包
+        command: Command.DONE,
         
-        payload: data
+        payload: info
     );
     
-    /// 数据应答包，通过服务器转发“确认收到”给原发送方
-    /// （packet 为收到的数据包；info 为附加信息，默认为空）
-    factory BridgePacket.copy(Magpie packet, [Uint8List? info]) => BridgePacket.create(
-        ack: 1,
+    /// 添加通行证
+    factory BridgePacket.acpt(Uint8List? info, {
+        required int source,
+    }) => BridgePacket.create(
+        ack: 0,
         
-        // bid 对调
-        target: packet.source,
-        source: packet.target,
+        target: 0,  // 这个包是发给服务器的指令，所以这里 target = 0
+        source: source,
         
-        // 原样保留
-        sn:    packet.sn,
-        index: packet.index,
-        count: packet.count,
+        sn:    0,
+        index: 0,
+        count: 1,
         
-        command: Command.COPY,  // “确认收到”
+        command: Command.ACPT,
+        
+        payload: info
+    );
+    
+    /// 撤销通行证
+    factory BridgePacket.deny(Uint8List? info, {
+        required int source,
+    }) => BridgePacket.create(
+        ack: 0,
+        
+        target: 0,  // 这个包是发给服务器的指令，所以这里 target = 0
+        source: source,
+        
+        sn:    0,
+        index: 0,
+        count: 1,
+        
+        command: Command.DENY,
         
         payload: info
     );
@@ -390,12 +410,53 @@ final class BridgePacket extends MessagePacket {
         payload: info ?? packet.payload
     );
     
+    /// 普通数据包，通过服务器转发给接收方
+    factory BridgePacket.data(Uint8List data, {
+        required int target,
+        required int source,
+        required int sn,
+        required int index,
+        required int count,
+    }) => BridgePacket.create(
+        ack: 0,
+        
+        target: target,
+        source: source,
+        
+        sn:    sn,
+        index: index,
+        count: count,
+        
+        command: 0,  // 为了尽可能控制数据包体积，这里使用空 command 打包
+        
+        payload: data
+    );
+    
+    /// 数据应答包，通过服务器转发“确认收到”给原发送方
+    /// （packet 为收到的数据包；info 为附加信息，默认为空）
+    factory BridgePacket.copy(Magpie packet, [Uint8List? info]) => BridgePacket.create(
+        ack: 1,
+        
+        // bid 对调
+        target: packet.source,
+        source: packet.target,
+        
+        // 原样保留
+        sn:    packet.sn,
+        index: packet.index,
+        count: packet.count,
+        
+        command: Command.COPY,  // “确认收到”
+        
+        payload: info
+    );
+    
 }
 ```
 
 ### 直连包 DirectPacket
 
-客户端与客户端直接通讯的消息包。
+客户端与客户端直接通信的消息包。
 
 ```dart
 final class DirectPacket extends MessagePacket {
@@ -476,7 +537,7 @@ final class DirectPacket extends MessagePacket {
     );
     
     //
-    //  TODO: 各种指令工厂
+    //  TODO: 各种指令工厂，不包括 fail(), done(), acpt(), deny()
     //        （跟 BridgePacket 类似，除了没有 target 和 source 参数）
     //
     

@@ -6,7 +6,7 @@
 
 1. 服务器通过一个**接收线程**从绑定的 UDP 端口中读取数据包，然后直接放入等待处理队列；
 2. **预处理线程**从前面的等待处理队列取出数据包，进行简单的校验之后，根据 target bid 决定是转交给"管理线程"处理，还是转交给"转发线程"处理；
-3. 服务器有一个**管理线程**，专门负责 bid 的分配管理、超时记录回收（purge），以及几个系统命令的应答；
+3. 服务器有一个**管理线程**，专门负责 bid 的分配管理、超时记录回收（purge）、通行证管理（ACPT/DENY），以及几个系统命令的应答；
 4. 服务器有 W 个**转发线程**，专门负责转发数据。
 
 ### 预处理线程校验
@@ -25,16 +25,17 @@
 
 管理线程需要检查 command 及 source bid：
 
-- 如果 command 是 "SYN?"，则为第一次握手（唯一允许 source bid 无内存记录的场景）：source bid 非 0 时一律走预订流程（无论来源是否 loopback，先检查是否合法且未被占用，失败则回复 "FAIL" 指令包）；source bid 为 0 时，loopback 来源按内定规则分配 bid = port，其余来源分配新 bid；
+- 如果 command 是 "SYN?"，则为第一次握手（唯一允许 source bid 无内存记录的场景）：source bid 非 0 时一律走预订流程（无论来源是否 loopback，先检查该 bid 是否有匹配记录（记录存在且 socket 信息相同）则直接复用，否则检查其是否合法且未被占用，失败则回复 "FAIL" 指令包）；source bid 为 0 时，loopback 来源按内定规则分配 bid = port，其余来源分配新 bid；
 - 否则 source bid 必须跟内存记录（socket 信息）匹配，然后根据 command 值进行相应的处理和应答：
 	- "ACK!"（第三次握手，source bid > 0）：校验 socket 匹配，标记该记录为已确认（acknowledged，连接建立）；
 	- "PING"（心跳，source bid > 0）：回复 "PONG"，同时更新其活跃时间；
 	- "FIN?"（挥手，source bid > 0）：先回复 "FIN!" 指令包，然后删除记录，释放 bid；
+	- ACPT/DENY（通行证管理，source bid > 0）：按通行证管理流程处理（解析载荷中的 bid 列表，全部有效则整体加入/移出通行证列表并回复 "DONE"，任一无效则整体不执行并回复 "FAIL"，详见 architecture 文档）；
 	- 未知 command：直接丢弃。
 
 ### 转发线程
 
-转发线程需要检查两个 bid，只有 socket 信息匹配才会转发；其中 source bid 还须已完成第三次握手（ACK!），连接未确认时以 "FAIL"（载荷带 socket 信息，与 "SYN!" 相同）通知客户端。
+转发线程需要检查两个 bid，只有 socket 信息匹配才会转发；其中 source bid 还须已完成第三次握手（ACK!），且 (source bid, 当前 socket) 须在 target 记录的通行证列表中（收件人已通过 "ACPT" 接纳发送方），连接未确认时以 "FAIL"（载荷带 socket 信息，与 "SYN!" 相同）通知客户端，通行证不匹配时静默丢弃。
 
 ## Bridge ID 管理
 
@@ -80,6 +81,7 @@ bid (32位无符号整数) 由高 16 位无符号整数 H 和低 16 位无符号
 - socket 信息
 - last_time  // 最后活跃时间
 - acknowledged  // 是否已完成第三次握手（ACK!），置位后连接才算 established
+- passes  // 通行证列表：本记录持有者已接纳的发送方 (bid, socket) 集合（允许向持有者发数据的白名单），由 ACPT/DENY 指令维护；随记录回收（purge）自动删除，无需额外清理
 
 > key 为 socket 信息的字符串形式（"{ip}:{port}"），创建记录时生成一次即可；由于 ip 和 port 固定不变，后续查询时直接取用该字段，无需每次重新拼接。
 
@@ -91,7 +93,7 @@ bid (32位无符号整数) 由高 16 位无符号整数 H 和低 16 位无符号
 服务器收到握手请求（"SYN?" 指令）时的 bid 分配流程：
 
 ```mermaid
-flowchart LR
+flowchart TD
     IN["收到 SYN? (target=0)"] --> Q0{"按 socket 查表<br/>记录存在?"}
     Q0 -- 是 --> REUSE["更新 last_time<br/>复用该记录 bid<br/>不再检查 source bid"]
     Q0 -- 否 --> Q1{"source bid 非 0?"}

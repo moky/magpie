@@ -1,4 +1,4 @@
-# Magpie Bridge
+# Magpie Bridge Messaging Protocol
 
 > Reliable UDP Relay Network
 

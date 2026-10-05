@@ -17,7 +17,7 @@ flowchart TD
     subgraph 服务器 S
         R[接收线程<br/>绑定 UDP 端口]
         P[预处理线程<br/>校验 / 分流]
-        M[管理线程<br/>bid 分配 / 回收 / 系统指令]
+        M[管理线程<br/>bid 分配 / 回收 / 通行证 / 系统指令]
         F[转发线程 × W<br/>按 bid 转发]
         Y[("yellow_pages<br/>bid ↔ socket")]
     end
@@ -30,7 +30,7 @@ flowchart TD
     P -->|"target ≠ 0<br/>转发请求"| F
     M -->|"分配/回收/查询"| Y
     F -->|"查询/校验"| Y
-    M -->|"SYN! / PONG / FIN! / FAIL"| A
+    M -->|"SYN! / PONG / FIN! / DONE / FAIL"| A
     F -->|"转发数据包"| B
     B -->|"COPY 应答"| F
     F -->|"转发应答"| A
@@ -65,7 +65,7 @@ flowchart LR
         P -->|"target ≠ 0"| Q3
         Q2 -->|"取出请求"| M
         Q3 -->|"取出任务"| F
-        M -->|"应答 SYN!/PONG/FIN!/FAIL"| U
+        M -->|"应答 SYN!/PONG/FIN!/DONE/FAIL"| U
         F -->|"原样转发"| U
     end
 ```
@@ -127,11 +127,13 @@ flowchart LR
     CMD -->|"ACK!"| H3[第三次握手<br/>校验 socket 匹配<br/>标记连接已建立 acknowledged]
     CMD -->|"PING"| HB[心跳<br/>回复 PONG<br/>更新活跃时间]
     CMD -->|"FIN?"| FW[挥手<br/>回复 FIN!<br/>删除记录释放 bid]
+    CMD -->|ACPT/DENY| PS[通行证管理<br/>校验 bid 列表有效性<br/>整体加入/移出通行证列表<br/>回复 DONE 或 FAIL]
     CMD -->|"其他"| DR[未知 command 丢弃]
     H1 --> IN
     H3 --> IN
     HB --> IN
     FW --> IN
+    PS --> IN
     DR --> IN
 ```
 
@@ -158,7 +160,9 @@ flowchart TD
     S1 -- 是 --> S2{target bid 记录存在<br/>且活跃?}
     S2 -- 否 --> DR[丢弃]
     DR --> IN
-    S2 -- 是 --> FWD[发送给 target bid<br/>对应的 socket] --> IN
+    S2 -- 是 --> S3{"(source bid, 当前 socket)<br/>在 target 通行证列表中?"}
+    S3 -- 否 --> DR
+    S3 -- 是 --> FWD[发送给 target bid<br/>对应的 socket] --> IN
 ```
 
 #### 流量控制
