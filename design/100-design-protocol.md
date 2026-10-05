@@ -1,6 +1,8 @@
-# Magpie Bridge Protocol
+# Magpie Bridge Messaging Protocol
 
-通讯协议格式主要由**协议头(header)**和**载荷(payload)**两部分组成。
+本通信协议全称为 Magpie Bridge Messaging Protocol “鹊桥通信协议”，个别场合可简称 Magpie Protocol，缩写为 MP。
+
+通信协议格式主要由**协议头(header)**和**载荷(payload)**两部分组成。
 
 协议头包含版本号、数据长度等校验信息，接收方收到消息包之后，需按协议标准逐项校验，如果不符合规范，则判定为错误包，可以直接丢弃。
 

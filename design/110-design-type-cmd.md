@@ -1,4 +1,4 @@
-# Magpie Bridge Protocol
+# Magpie Bridge Messaging Protocol
 
 本文档定义协议头标志位含义、内部关系，以及通用指令和应答机制。
 
