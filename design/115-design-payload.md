@@ -81,17 +81,19 @@
 
 密钥的生成：客户端 A 向服务器 S 发送第1次握手包 "SYN?" 时。
 
-S 收到 "SYN?" 指令之后，根据流程分配 bid record，
-同时生成一个随机数存在 record.pending_secret，然后在应答包 "SYN!" 中发给 A（mp-secret 字段，Base64 编码）。
+S 收到 "SYN?" 指令之后，根据流程分配 bid record：
+
+- 若该记录**尚未确认**（第一次握手）：生成一个随机数存在 record.pending_secret，然后在应答包 "SYN!" 中发给 A（mp-secret 字段，Base64 编码）；
+- 若该记录**已确认**（复用记录的重新握手，如客户端重启后 socket 未变）：**不再重新生成**，直接以原 record.secret 随 "SYN!" 下发（mp-secret 字段，Base64 编码）——secret 一经确认写入记录后不再改变，直到该记录被回收。
 
 A 收到此密钥之后，以 HMAC-SHA256 算法、该密钥为 key、**数据区全部字节**为消息，计算消息认证码得到哈希值 H，然后在 "ACK!" 中将 H 发给 S（mp-verify 字段，Base64 编码）。
-S 收到并校验通过之后，将此密钥存为 record.secret，并删除 record.pending_secret。
+S 收到并校验通过之后（校验密钥：记录存在 pending_secret 时用 pending_secret，否则用 record.secret）：若记录尚未确认，将此密钥转存为 record.secret 并删除 record.pending_secret、标记连接已建立；若记录已确认，则 secret 保持不变、无需任何状态变更。
 
 此后 S 与 A 之间发送/接收**所有系统指令（含应答）**时，均须按同样方式携带 mp-verify（对数据区全部字节计算 HMAC-SHA256，Base64 编码），供对端校验，校验失败按错误包处理。
 
 注：
 
-1. Secret 只会在网络中出现一次，即 "SYN!" 包中，由服务器发给客户端；
+1. Secret 只会在握手应答 "SYN!" 中出现，由服务器发给客户端；重新握手（复用已确认记录）时下发的仍是原值，不再生成新密钥；
 2. 此后任何数据包都不会带密钥，只会带校验信息（mp-verify 哈希值）；
 3. 此机制不能防御嗅探级威胁，即如果攻击者在 S 与 A 之间的网络路径上就有可能获取 "SYN!" 内容；
 4. mp-verify 机制仅在双方共享 secret 时使用，当前仅存在于服务器场景（客户端直连尚无 secret，是否引入见安全文档）；无 secret 时相关字段一律不出现；
@@ -106,12 +108,12 @@ S 收到并校验通过之后，将此密钥存为 record.secret，并删除 rec
 ```
 CONNECT /bid MP/1.0
 Content-Type: application/json
-Content-Length: 256
+Content-Length: 512
 
 {"meta":{一些用户资料信息等},"time":123.44}
 ```
 
-> 当前服务器默认要求第1次握手包载荷不小于 256 字节（配置项 handshake_min_payload，可调整），防止放大攻击；数据区示例仅为示意，实际内容由应用层定义。
+> 当前服务器默认要求第1次握手包载荷不小于 512 字节（配置项 handshake_min_payload，可调整），防止放大攻击并抬高握手洪流门槛；数据区示例仅为示意，实际内容由应用层定义，不足时须填充至不低于该值。
 
 ### 示例 0.2 - 第2次握手 "SYN!"
 

@@ -53,7 +53,8 @@
 	- 如果为 0：
 		- 来源 IP 为环回地址（loopback: 127.0.0.0/8, ::1/128）时，按内定规则分配 bid = port（若该 bid 已被其他 socket 占用，直接回复 "FAIL" 指令包）；
 		- 否则按分配规则生成一个新 bid（分配不成功则回复 "FAIL" 指令包）；
-- 生成一个随机数存于记录中（pending_secret），登记当前 socket 信息，然后回复 "SYN!" 包（载荷文本头携带 mp-secret，Base64 编码；此时不标记连接已建立，转发线程仍不可转发其数据包），等待客户端在 "ACK!" 中回传校验值（见 2.1）。
+- 若该记录尚未确认（pending_secret 存在，连接未建立）：生成一个随机数存于记录中（pending_secret），登记当前 socket 信息，然后回复 "SYN!" 包（载荷文本头携带 mp-secret，Base64 编码；此时不标记连接已建立，转发线程仍不可转发其数据包），等待客户端在 "ACK!" 中回传校验值（见 2.1）；
+- 若该记录已确认（record.secret 已建立）：**不再重新生成 secret**，直接以原 record.secret 随 "SYN!" 下发（同样携带 mp-secret，Base64 编码），等待客户端 "ACK!" 确认（校验值以 record.secret 计算，见 2.1）——secret 一经确认写入记录后不再改变，直到该记录被回收。
 
 #### 2.1. 第三次握手
 
@@ -61,8 +62,8 @@
 > （同时 source bid > 0，必须）
 
 处理流程：取出 source bid，与内存数据表中的记录比较，如果 socket 不匹配就直接丢弃，一致则继续：
-- 校验 "ACK!" 载荷文本头 mp-verify（HMAC-SHA256，对数据区全部字节计算，与记录中的 pending_secret 比对）；校验失败判定为不可信来源，直接丢弃、不应答（客户端将重发 "SYN?" 重新握手）；
-- 校验通过则更新其活跃时间、清除 offline 标记，将 pending_secret 转存为 record.secret（删除 pending_secret），并标记该记录为已确认（acknowledged，连接建立），此后转发线程方可转发其数据包。
+- 校验 "ACK!" 载荷文本头 mp-verify（HMAC-SHA256，对数据区全部字节计算，与记录中的待确认密钥比对：pending_secret 存在时用 pending_secret，否则用 record.secret——复用已确认记录的重新握手）；校验失败判定为不可信来源，直接丢弃、不应答（客户端将重发 "SYN?" 重新握手）；
+- 校验通过则更新其活跃时间、清除 offline 标记；若记录尚未确认（pending_secret 存在），则将 pending_secret 转存为 record.secret（删除 pending_secret）并标记该记录为已确认（acknowledged，连接建立），此后转发线程方可转发其数据包；若记录已确认，则 secret 保持不变（不覆盖、不轮换），无需其他状态变更。
 
 #### 2.2. 心跳包
 
@@ -109,7 +110,7 @@
 - 如果当前所有的 bid 都没有等待转发任务，则 sleep 一小段时间后继续下一个循环；
 - 取出该包中的 source bid，检查 yellow_pages 中的记录存在、socket 信息匹配且已完成第三次握手（ACK!）；连接未确认则以 "FAIL"（载荷带 socket 信息，与 "SYN!" 相同）通知客户端并丢弃该包；
 - 取出该包中的 target bid，检查 yellow_pages 中的记录是否存在，不存在则直接丢弃，进入下一个循环；
-- 若 target 记录已标记离线（offline）：当 (source bid, 当前 socket) 在该记录的通行证列表中（发送方已被收件人接纳）时，回复 "FAIL"（载荷遵循载荷文档格式，数据区说明对端离线）通知发送方，然后丢弃；否则静默丢弃（不应答、不转发，防止暴露收件人的存在与接纳状态），进入下一个循环；
+- 若 target 记录不活跃（已标记离线 offline，或 last_time 超过 T_active 在线判定窗口、默认 120 秒）：当 (source bid, 当前 socket) 在该记录的通行证列表中（发送方已被收件人接纳）时，回复 "FAIL"（载荷遵循载荷文档格式，数据区说明对端离线）通知发送方，然后丢弃；否则静默丢弃（不应答、不转发，防止暴露收件人的存在与接纳状态），进入下一个循环；
 - 检查 (source bid, 当前 socket) 是否在 target 记录的通行证列表中（收件人已通过 "ACPT" 接纳发送方），否则静默丢弃（不应答、不转发，防止暴露收件人的存在与接纳状态）进入下一个循环；
 - 将该数据包通过绑定的 UDP 接口发送给 target bid 所对应的 socket；
 

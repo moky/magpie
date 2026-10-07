@@ -21,10 +21,10 @@
 
 ### 标志位解析
 
-- **A=1** 表示是应答包（数据应答 "COPY" 必须 D=1；系统指令应答 SYN!/ACK!/PONG/FIN! 及结果应答 DONE/FAIL 为 D=0）；
+- **A=1** 表示是应答包（数据应答 "COPY" 必须 D=1；系统指令应答 SYN!/ACK!/PONG/FIN! 当前为 D=0，结果应答 DONE/FAIL 在当前系统指令场景下亦为 D=0，但其 D/E 可随未来用途扩展、校验不锁定，见说明 5）；
 - **B=1** 表示服务器桥接包（包括与服务器握手、要求转发），代表协议头中包含两个 4 字节整数，依次为 target 和 source (Bridge ID，门牌号)；
 - **C=1** 表示协议头含有 command 指令信息 (4 bytes)；
-- **D=1** 表示协议头含有序列号字段 sn (4 bytes)；D=1 仅用于普通数据包及其数据应答 "COPY"（需要 sn 配对确认），系统指令（SYN?/SYN!/ACK!/ACPT/DENY/PING/PONG/FIN?/FIN!/DONE/FAIL/NOOP）一律 D=0；分包参数 (index, count) 是否存在由 E 决定（见下），其中 count 是分包总数，index 是当前子包序号 (0 <= index < count)；
+- **D=1** 表示协议头含有序列号字段 sn (4 bytes)；D=1 仅用于普通数据包及其数据应答 "COPY"（需要 sn 配对确认），系统指令（SYN?/SYN!/ACK!/ACPT/DENY/PING/PONG/FIN?/FIN!/NOOP，以及当前系统指令场景下的 DONE/FAIL）当前均为 D=0；其中 DONE/FAIL 的 D/E 可随未来用途扩展（见说明 5），校验不锁定；分包参数 (index, count) 是否存在由 E 决定（见下），其中 count 是分包总数，index 是当前子包序号 (0 <= index < count)；
 - **E**: 整数，表示额外扩展的分包参数 (index, count) 变量的长度，取值范围如下：
 	- 0: 无参数（无需分包的微型数据包，相当于 index=0, count=1）
 	- 1: 参数长度为 1 字节（2 <= count < 256)
@@ -96,7 +96,7 @@ static int calcExt(int count) {
 
 ### 内部关系
 
-1. 数据应答包（"COPY"，A=1, D=1）必定携带 sn（及可能的 index, count），用于与原始数据包配对确认；系统指令应答（SYN!/ACK!/PONG/FIN!/DONE/FAIL，A=1, D=0）无需 sn；
+1. 数据应答包（"COPY"，A=1, D=1）必定携带 sn（及可能的 index, count），用于与原始数据包配对确认；系统指令应答（SYN!/ACK!/PONG/FIN!，以及当前系统指令场景下的 DONE/FAIL，A=1, D=0）无需 sn（DONE/FAIL 的 D/E 可随未来用途扩展，见说明 5）；
 2. 如果 B=0，则表示是客户端直连的数据包，中间不经过服务器，所以协议头不含 bid 字段（target/source 字段不存在）；
 3. 如果 C=1，则此协议头含有 command 信息（4字节），通常用作额外参数（具体值在后面定义）；
 4. 如果 D=1，则表示该数据包存在 sn 以及可能的 index, count（由 E 决定）；客户端收到 D=1 且 A=0 的普通数据包时需要回复数据应答 "COPY"；
@@ -134,7 +134,7 @@ Command 本质为一个 32 位无符号整数，取值范围 1 ~ 4294967295；�
 说明：
 
 1. 普通数据包 (A=0, D=1) 发送后需要等待接收方的 "COPY" 应答（可由 sn + index 配合去重），其他均不必等待，所以 **A、D 组合可直接作为“发送后是否需要等待应答”的判断条件**；
-2. **系统指令**（SYN?/SYN!/ACK!/ACPT/DENY/PING/PONG/FIN?/FIN!/DONE/FAIL/NOOP）均为 D=0，不携带 sn，发送方无需维护等待应答的队列；
+2. **系统指令**（SYN?/SYN!/ACK!/ACPT/DENY/PING/PONG/FIN?/FIN!/NOOP，以及当前系统指令场景下的 DONE/FAIL）当前均为 D=0，不携带 sn，发送方无需维护等待应答的队列；其中 DONE/FAIL 的 D/E 可随未来用途扩展、校验不锁定（见说明 5）；
 3. 所有 A=1 均为**被动指令**（应答型，如 DONE/FAIL/COPY 等），本义就是“应答”功能，因此也无需维护等待应答的队列；
 4. 锁死 B=1 的 4 个系统指令（ACPT/DENY/DONE/FAIL）只会用在与服务器通信场景，其余所有数据包（含系统指令包和普通数据包）都可选择是否通过服务器转发，因此它们的 B 可以是 1 也可以是 0；
 5. 服务器应答指令（DONE/FAIL）用于系统指令场景时 A=1, B=1, C=1, D=0, E=0；若未来扩展用于数据包转发状态应答，则 D/E 可随场景取值，因此校验不能锁定 D 和 E；

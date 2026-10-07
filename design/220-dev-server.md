@@ -22,10 +22,10 @@
 	- source bid = 0 且 target bid ≠ 0 属于服务端上行校验规则（客户端不得伪造服务器下发包），判定后直接丢弃；
 		- B=1 时 target bid 和 source bid 非 0 时不能相等，即服务器转发包不能发往同一个客户端（同时为 0 是第一次握手包，这个属于例外），判定后直接丢弃；
 2. **管理线程**需要检查 command 及 source bid：
-	- 如果 command 是 "SYN?"，则为第一次握手（唯一允许 source bid 无内存记录的场景）：source bid 非 0 时一律走预订流程（无论来源是否 loopback，先检查是否合法且未被占用，失败则回复 "FAIL" 指令包）；source bid 为 0 时，loopback 来源按内定规则分配 bid = port，其余来源分配新 bid；分配成功后生成一个随机数存于记录（pending_secret），随 "SYN!" 下发（载荷文本头 mp-secret，Base64 编码）；
-	- 如果 command 是 "ACK!"，则为第三次握手：校验 "ACK!" 载荷文本头 mp-verify（HMAC-SHA256，对数据区全部字节计算，与记录中的 pending_secret 比对）；通过后将密钥转存为 record.secret（删除 pending_secret）、清除 offline 标记，并标记该记录为已确认（acknowledged，连接建立）；
+	- 如果 command 是 "SYN?"，则为第一次握手（唯一允许 source bid 无内存记录的场景）：source bid 非 0 时一律走预订流程（无论来源是否 loopback，先检查是否合法且未被占用，失败则回复 "FAIL" 指令包）；source bid 为 0 时，loopback 来源按内定规则分配 bid = port，其余来源分配新 bid；新建（未确认）记录时生成一个随机数存于记录（pending_secret），随 "SYN!" 下发（载荷文本头 mp-secret，Base64 编码）；复用已确认记录时不再重新生成，直接下发原 record.secret（secret 一经确认不再改变）；
+	- 如果 command 是 "ACK!"，则为第三次握手：校验 "ACK!" 载荷文本头 mp-verify（HMAC-SHA256，对数据区全部字节计算，与记录中的待确认密钥比对：pending_secret 存在时用 pending_secret，否则用 record.secret）；校验通过后清除 offline 标记并标记/保持该记录为已确认（acknowledged，连接建立）——若记录尚未确认则将密钥转存为 record.secret（删除 pending_secret）；若记录已确认则 secret 保持不变（不覆盖、不轮换）；
 	- 否则 source bid 必须跟内存记录（socket 信息）匹配；凡 record.secret 已建立后收到的系统指令（"SYN?" 除外），须先校验载荷文本头 mp-verify，校验失败视为不可信来源直接丢弃、不应答；然后根据 command 值进行相应的处理和应答（ACPT/DENY 按通行证管理流程处理，"PING" 回 "PONG"，"FIN?" 先将记录标记为离线 offline，再回 "FIN!" 挥手应答——不删除记录、不立即释放 bid，详见架构文档）；
-3. **转发线程**需要检查两个 bid，只有 socket 信息匹配才会转发；其中 source bid 还须已完成第三次握手（ACK!），连接未确认时以 "FAIL"（载荷带 socket 信息，与 "SYN!" 相同）通知客户端；target 记录不存在则直接丢弃；target 记录标记离线（offline）时——发送方已被收件人接纳（(source bid, 当前 socket) 在 target 记录的通行证列表中）则回复 "FAIL"（数据区说明对端离线）通知发送方，否则静默丢弃；转发前还须确认 (source bid, 当前 socket) 在 target 记录的通行证列表中（收件人已通过 "ACPT" 接纳发送方），否则静默丢弃（不应答、不转发，防止暴露收件人的存在与接纳状态）；
+3. **转发线程**需要检查两个 bid，只有 socket 信息匹配才会转发；其中 source bid 还须已完成第三次握手（ACK!），连接未确认时以 "FAIL"（载荷带 socket 信息，与 "SYN!" 相同）通知客户端；target 记录不存在则直接丢弃；target 记录不活跃（已标记离线 offline，或 last_time 超过 T_active 在线判定窗口、默认 120 秒）时——发送方已被收件人接纳（(source bid, 当前 socket) 在 target 记录的通行证列表中）则回复 "FAIL"（数据区说明对端离线）通知发送方，否则静默丢弃；转发前还须确认 (source bid, 当前 socket) 在 target 记录的通行证列表中（收件人已通过 "ACPT" 接纳发送方），否则静默丢弃（不应答、不转发，防止暴露收件人的存在与接纳状态）；
 
 ## Bridge ID 管理
 
@@ -52,7 +52,7 @@ bid (32位无符号整数) 由高 16 位无符号整数 H 和低 16 位无符号
 ### 冲突判定
 
 通过 bid 查询，如果记录不存在，或者记录中的 socket 信息相同，则无冲突；
-反之，只要记录中的 socket 信息与当前不同，则判定为冲突（记录回收仅由管理线程在空闲时通过 purge 完成，其他线程不做超时覆盖判断）。
+反之，只要记录中的 socket 信息与当前不同，则判定为冲突（记录回收仅由管理线程在空闲时完成——未确认记录经 syn_set 高频扫描、常规记录经 purge，其他线程不做超时覆盖判断）。
 
 ### 内存分配表
 
@@ -65,8 +65,8 @@ bid (32位无符号整数) 由高 16 位无符号整数 H 和低 16 位无符号
 - socket 信息
 - last_time  // 最后活跃时间
 - acknowledged  // 是否已完成第三次握手（ACK!），置位后连接才算 established
-- pending_secret  // 握手密钥（待确认）：服务器分配/复用 bid 后生成，随 "SYN!" 下发，客户端 "ACK!" 回传校验值通过后转正
-- secret  // 握手密钥（已确认）：双方共享，用于此后所有系统指令（含应答）的 HMAC-SHA256 校验（mp-verify）
+- pending_secret  // 握手密钥（待确认）：仅服务器**新建** bid 记录（尚未确认）时生成，随 "SYN!" 下发，客户端 "ACK!" 回传校验值通过后转正为 record.secret；复用已确认记录时不再重新生成，直接下发原 record.secret
+- secret  // 握手密钥（已确认）：双方共享，用于此后所有系统指令（含应答）的 HMAC-SHA256 校验（mp-verify）；一经确认写入记录后不再改变（重新握手仅下发原值），直到该记录被回收
 - offline  // 离线标记：收到 "FIN?" 后置位（记录保留、bid 不立即释放，仍按超时规则回收）；任何上行数据清除该标记并更新 last_time
 - passes  // 通行证列表：本记录持有者已接纳的发送方 (bid, socket) 集合（允许向持有者发数据的白名单），由 ACPT/DENY 指令维护；随记录回收（purge）自动删除，无需额外清理
 
@@ -95,7 +95,7 @@ bid (32位无符号整数) 由高 16 位无符号整数 H 和低 16 位无符号
 	3. 如果存在 bid 相同但 socket 信息不同的记录，则判定为冲突，无法占用此 bid，需重新生成 bid 并再次检查冲突（重试达到 M 次仍冲突，则由管理线程回复 "FAIL" 指令包，见生成规则第 6 条）。
 
 > 每次新建分配记录时，都需要同时建立两个索引（分别以 bid、socket 信息为 key）指向该记录，以方便后面查询。
-> 无论新建、复用还是内定/预订产生的记录，只要回复 "SYN!"，管理线程都会重新生成一个随机数存入记录（pending_secret），随 "SYN!" 载荷文本头下发（mp-secret，Base64 编码）；待客户端 "ACK!" 回传校验值（mp-verify）并通过校验后，转存为 record.secret（见管理线程职责）。
+> 新建（未确认）记录回复 "SYN!" 时，管理线程生成一个随机数存入记录（pending_secret），随 "SYN!" 载荷文本头下发（mp-secret，Base64 编码）；待客户端 "ACK!" 回传校验值（mp-verify）并通过校验后，转存为 record.secret（见管理线程职责）。**复用已确认记录的重新握手（无论 socket 匹配复用、内定还是预订）不再重新生成 secret，直接下发原 record.secret**——secret 一经确认写入记录后不再改变，直到该记录被回收。
 
 管理线程空闲时，按以下两条路径执行回收职责（均同时删除对应的 bid 和 socket 信息索引）：
 
@@ -131,7 +131,7 @@ purge(now) 只负责回收超过 expires（默认 24 小时）的记录（```las
 > 未确认握手短超时（默认 10 秒）可通过配置文件 handshake_pending_timeout 调整。
 
 - **不做惰性回收**：管理线程在按 bid 或 socket 信息查询分配表时**不检查是否过期**（只要记录存在就按存在处理，分配与冲突判定逻辑保持简单）；过期记录的回收统一由上述两条路径完成。洪水创建的"僵尸"未确认记录被查询路径恰好命中的概率极小（bid 空间 2^32，命中概率与未确认记录数/总空间同阶），为此引入额外的过期判断分支收益极小、得不偿失；
-- **未确认记录上限（内存保护）**：syn_set 的大小达到 unconfirmed_record_limit（默认 1000000）时，新的 "SYN?" 直接丢弃、不应答（syn_set 的 size 查询是 O(1)，上限判断零成本）。该上限仅用于防止极端情况下的内存失控（每条未确认记录约几十字节，100 万条约 64 MiB）。要打满此上限，攻击者需以约 23 MB/s 的维持流量（按最小载荷 256 字节、最坏滞留 11 秒计，约 10 万 "SYN?"/秒）持续灌注伪造来源的握手包——达到该强度的攻击已会先打满单机 CPU（每包分配+回包约 1~2 µs，10 万包/秒占 10~20% 单核）与带宽，**内存上限并非最先失效的防线**，它只负责"CPU 与带宽被打满之前，内存不被堆爆"。更高强度的握手洪流（G 级）属运维层（防火墙包速率限制、流量清洗、Anycast/带宽冗余）的范畴，单机应用无法在协议层抵御；协议层不为此牺牲正常客户端（不缩短有效时间、不提高最小载荷），防洪水由 handshake_min_payload（防放大）、syn_set 高频回收与内存保护上限共同承担。
+- **未确认记录上限（内存保护）**：syn_set 的大小达到 unconfirmed_record_limit（默认 1000000）时，新的 "SYN?" 直接丢弃、不应答（syn_set 的 size 查询是 O(1)，上限判断零成本）。该上限仅用于防止极端情况下的内存失控（每条未确认记录约几十字节，100 万条约 64 MiB）。要打满此上限，攻击者需以约 53 MB/s 的维持流量（按最小载荷 512 字节、最坏滞留 11 秒计，约 10 万 "SYN?"/秒）持续灌注伪造来源的握手包——达到该强度的攻击已会先打满单机 CPU（每包分配+回包约 1~2 µs，10 万包/秒占 10~20% 单核）与带宽，**内存上限并非最先失效的防线**，它只负责"CPU 与带宽被打满之前，内存不被堆爆"。更高强度的握手洪流（G 级）属运维层（防火墙包速率限制、流量清洗、Anycast/带宽冗余）的范畴，单机应用无法在协议层抵御；协议层不为此牺牲正常客户端（不缩短有效时间），仅适度提高握手最小载荷（默认 512 字节，见配置）以抬高攻击门槛并增大防放大余量，防洪水由 handshake_min_payload（防放大）、syn_set 高频回收与内存保护上限共同承担。
 - 按来源 IP 的 "SYN?" 限速在 UDP 下可被伪造来源地址绕过，不作为协议层防洪水手段。
 
 > 注：“在线”判定窗口 T_active（见工作流文档，默认 2 分钟，可通过配置文件 record_active_timeout 调整）与回收时效 expires（默认 24 小时，可通过配置文件 record_expires 调整）是两个不同的参数：T_active 用于转发线程判断记录是否活跃（在线），expires 用于管理线程回收超时记录。
@@ -231,8 +231,8 @@ record_recycle_interval = 600.0
 # 120.0 = 2 minutes)
 record_active_timeout = 120.0
 # handshake flood guard: minimum payload length of the first
-# handshake packet "SYN?" (bytes, default: 256)
-handshake_min_payload = 256
+# handshake packet "SYN?" (bytes, default: 512)
+handshake_min_payload = 512
 # handshake pending timeout: an unconfirmed bid record (the client
 # sent "SYN?" but has not completed "ACK!") is considered expired
 # when it has been inactive for longer than this (seconds, default:

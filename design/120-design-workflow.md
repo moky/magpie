@@ -43,9 +43,9 @@
 
 握手过程中的密钥（secret）校验（详见载荷文档）：
 
-- 服务器在分配 bid record 的同时生成一个随机数存于 record.pending_secret，随 "SYN!" 下发（载荷文本头 mp-secret 字段，Base64 编码）；
+- 服务器在**新建** bid record 时生成一个随机数存于 record.pending_secret，随 "SYN!" 下发（载荷文本头 mp-secret 字段，Base64 编码）；若为复用已确认记录的重新握手，则不再重新生成，直接下发原 record.secret（secret 一经确认不再改变，直到记录回收）；
 - 客户端收到后，以 HMAC-SHA256 算法（密钥 = 该 secret，消息 = 载荷数据区全部字节）计算校验值，在 "ACK!" 中回传（载荷文本头 mp-verify 字段）；
-- 服务器校验通过后，将密钥转存为 record.secret（删除 pending_secret），此时连接才算真正建立；此后所有系统指令（含应答）均须携带 mp-verify，供对端校验。
+- 服务器校验通过后（校验密钥：pending_secret 存在时用 pending_secret，否则用 record.secret），若记录尚未确认则将密钥转存为 record.secret（删除 pending_secret）、标记连接已建立；若记录已确认则 secret 保持不变；此后所有系统指令（含应答）均须携带 mp-verify，供对端校验。
 
 备注：当服务器回复 "SYN!" 的时候，可以同时附带客户端 socket 信息（载荷数据区，如 ```{"UDP":"12.34.56.78:12345"}```），载荷遵循载荷文档定义的格式（文本头 + 空行 + 数据区）。
 
