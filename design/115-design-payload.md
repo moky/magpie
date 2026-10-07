@@ -79,29 +79,41 @@
 
 ### Secret （密钥）
 
-密钥的生成：客户端 A 向服务器 S 发送第1次握手包 "SYN?" 时。
+握手采用**无状态**方式（详见架构/服务器文档）："SYN?" 阶段服务器不创建记录，通过验证令牌（token）在 "ACK!" 阶段完成身份验证后，才创建 bid record 并写入固定不变的 secret。
 
-S 收到 "SYN?" 指令之后，根据流程分配 bid record：
+#### 服务器密钥组（server_secrets）
 
-- 若该记录**尚未确认**（第一次握手）：生成一个随机数存在 record.pending_secret，然后在应答包 "SYN!" 中发给 A（mp-secret 字段，Base64 编码）；
-- 若该记录**已确认**（复用记录的重新握手，如客户端重启后 socket 未变）：**不再重新生成**，直接以原 record.secret 随 "SYN!" 下发（mp-secret 字段，Base64 编码）——secret 一经确认写入记录后不再改变，直到该记录被回收。
+服务器内部维护一个随机密钥组 server_secrets（初始化含 1 个密钥）与最后生成时间 last_secret_time：
 
-A 收到此密钥之后，以 HMAC-SHA256 算法、该密钥为 key、**数据区全部字节**为消息，计算消息认证码得到哈希值 H，然后在 "ACK!" 中将 H 发给 S（mp-verify 字段，Base64 编码）。
-S 收到并校验通过之后（校验密钥：记录存在 pending_secret 时用 pending_secret，否则用 record.secret）：若记录尚未确认，将此密钥转存为 record.secret 并删除 record.pending_secret、标记连接已建立；若记录已确认，则 secret 保持不变、无需任何状态变更。
+- 生成 token 时：若 ```now - last_secret_time > server_secret_rotate_interval```（默认 600 秒），生成一个新随机密钥放入队头、更新 last_secret_time，并只保留最近 2 个密钥，然后取队头密钥计算；
+- 验证 token 时：取出全部密钥（最多 2 个）逐个重算比对，任一匹配即通过（旧 token 在旧密钥被轮换出列表之前仍可验证）。
 
-此后 S 与 A 之间发送/接收**所有系统指令（含应答）**时，均须按同样方式携带 mp-verify（对数据区全部字节计算 HMAC-SHA256，Base64 编码），供对端校验，校验失败按错误包处理。
+#### 握手流程（客户端 A → 服务器 S）
+
+1. A 发送 "SYN?"：S 根据流程分配 bid（复用/预订/内定/新分配，详见服务器文档），生成客户端密钥 secret（复用已确认记录时取原 record.secret，否则随机生成），以服务器密钥对关键信息计算验证令牌：
+
+   > token = HMAC-SHA256(key = server_secret, message = UTF-8("bid={bid};socket={socket};secret={secret};time={time}"))
+   > 其中 bid 为 10 进制整数、socket 为 "{ip}:{port}" 字符串、secret 为 Base64 编码、time 为服务器当前时间戳（秒，10 进制整数）。
+
+   然后回复 "SYN!"：载荷文本头 mp-secret 携带 secret（Base64 编码），载荷数据区携带 socket 信息、token 与 token_time（即上述 time）。**此阶段 S 不创建任何记录**（无状态，不保存 bid 与 secret）。
+
+2. A 收到后**原样回传**（token 由服务器密钥计算，有且只有服务器能校验，客户端不能篡改——任何字段改动都会导致重算不匹配）："ACK!" 载荷文本头 mp-secret 携带同样的 secret，载荷数据区携带同样的 token 与 token_time（数据区 time 为 A 当前时间戳，仅用于防重放）。
+
+3. S 收到 "ACK!" 后先检查 token_time 是否超出有效窗口（handshake_token_timeout，默认 60 秒）：超时回复 "FAIL"；否则用服务器密钥组对 "bid={协议头 source bid};socket={服务器观察到的来源 ip:port};secret={包内 mp-secret};time={包内 token_time}" 重算 token 并与包内 token 比对：全部不匹配则判定为不可信来源，直接丢弃、不应答；匹配则创建 bid record（bid → socket、secret 取包内 mp-secret 并固定不变，连接即已确认；记录已存在且 socket 匹配时幂等更新，secret 保持不变；记录已存在但 socket 不同则回复 "FAIL"）。
+
+此后 S 与 A 之间发送/接收**所有系统指令（含应答）**时，均须携带 mp-verify（HMAC-SHA256，key = 双方共享的 record.secret，对数据区全部字节计算，Base64 编码），供对端校验，校验失败按错误包处理；secret 一经确认写入记录后不再改变（重新握手仅下发原值），直到该记录被回收。
 
 注：
 
-1. Secret 只会在握手应答 "SYN!" 中出现，由服务器发给客户端；重新握手（复用已确认记录）时下发的仍是原值，不再生成新密钥；
-2. 此后任何数据包都不会带密钥，只会带校验信息（mp-verify 哈希值）；
-3. 此机制不能防御嗅探级威胁，即如果攻击者在 S 与 A 之间的网络路径上就有可能获取 "SYN!" 内容；
+1. Secret 只会在握手阶段出现（"SYN!" 下发、 "ACK!" 原样回传），由服务器发给客户端；重新握手（复用已确认记录）时下发的仍是原值，不再生成新密钥；
+2. 握手完成后的任何数据包都不会带密钥，只会带校验信息（mp-verify 哈希值）；
+3. 此机制不能防御嗅探级威胁，即如果攻击者在 S 与 A 之间的网络路径上就有可能获取 "SYN!" 内容（token 是认证码而非加密）；
 4. mp-verify 机制仅在双方共享 secret 时使用，当前仅存在于服务器场景（客户端直连尚无 secret，是否引入见安全文档）；无 secret 时相关字段一律不出现；
 5. 防重放（时间戳单调性校验等）属安全设计范畴，见安全文档，本文档不展开。
 
 ## 示例
 
-> 以下示例中 mp-verify 均为 HMAC-SHA256 对数据区全部字节计算的 Base64 编码；"DONE" 与 "FAIL" 使用 mp-src-command 回显被应答的原请求 command（"FAIL" 按场景回显：SYN?/DATA/ACPT/DENY）。
+> 以下示例中 mp-verify 均为 HMAC-SHA256 对数据区全部字节计算的 Base64 编码（握手示例 0.2/0.3 除外：其文本头为 mp-secret、数据区为 token/token_time，见上文 Secret 节）；"DONE" 与 "FAIL" 使用 mp-src-command 回显被应答的原请求 command（"FAIL" 按场景回显：SYN?/DATA/ACPT/DENY）。
 
 ### 示例 0.1 - 第1次握手 "SYN?"
 
@@ -121,21 +133,25 @@ Content-Length: 512
 MP/1.0 102 Processing
 mp-secret: {密钥，Base64 编码}
 Content-Type: application/json
-Content-Length: 38
+Content-Length: ...
 
-{"UDP":"12.34.56.78:90","time":123.45}
+{"UDP":"12.34.56.78:90","time":123.45,"token":"{令牌，Base64 编码}","token_time":123}
 ```
+
+> token 为服务器密钥计算的验证令牌（HMAC-SHA256，Base64 编码），token_time 为生成 token 时的服务器时间戳（秒，10 进制整数）；两者由客户端在 "ACK!" 中原样回传。
 
 ### 示例 0.3 - 第3次握手 "ACK!"
 
 ```
 MP/1.0 200 OK
-mp-verify: {哈希值，Base64 编码}
+mp-secret: {密钥，Base64 编码}
 Content-Type: application/json
-Content-Length: 38
+Content-Length: ...
 
-{"UDP":"12.34.56.78:90","time":123.46}
+{"time":123.46,"token":"{令牌，Base64 编码}","token_time":123}
 ```
+
+> 数据区仅需携带 time（客户端当前时间戳，防重放）与 token/token_time（原样回传，不携带 UDP 字段）；服务器以来源地址校验 token，验证通过后创建 bid record。
 
 ### 示例 1.1 - 创建通行证 "ACPT"
 

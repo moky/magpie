@@ -224,6 +224,8 @@ final class BridgePacket extends MessagePacket {
     );
     
     /// 第二次握手
+    /// info 为载荷数据区（含 UDP、token、token_time，由服务器逻辑构造；
+    /// 文本头 mp-secret 携带握手密钥，由调用方加入）
     factory BridgePacket.synAck(Uint8List? info, {
         required int target,  // 服务器为该客户端分配的 bid
     }) => BridgePacket.create(
@@ -242,6 +244,8 @@ final class BridgePacket extends MessagePacket {
     );
     
     /// 第三次握手
+    /// info 原样回传第二次握手包中的 token/token_time（数据区 time 取
+    /// 客户端当前时间；文本头 mp-secret 携带握手密钥，由调用方加入）
     factory BridgePacket.ack(Uint8List? info, {
         required int source,  // 从第二次握手包中得到的 target
     }) => BridgePacket.create(

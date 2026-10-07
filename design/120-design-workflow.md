@@ -39,15 +39,15 @@
 
 2. 第二次握手‌：服务器收到后回复 "SYN!" 报文（即 TCP 语境下的 SYN+ACK），target bid 为服务器按生成规则为 socket 分配的整数 x，source bid 为 0（表示来自服务器），服务器进入 SYN_RCVD 状态；若 bid 分配失败（预订被占用/非法、内定冲突、服务器已满），则回复 "FAIL" 指令包，客户端可重新申请或放弃。‌‌
 
-3. 第三次握手‌：客户端收到后发送 "ACK!" 报文，target bid 为 0（表示发给服务器），source bid 为刚收到的整数 x，服务器验证无误后标记该记录为已确认（acknowledged，连接建立），双方进入 ESTABLISHED 状态，此后转发线程方可转发其数据包 。
+3. 第三次握手‌：客户端收到后发送 "ACK!" 报文，target bid 为 0（表示发给服务器），source bid 为刚收到的整数 x，载荷原样回传 "SYN!" 中的密钥与令牌，服务器验证令牌无误后创建 bid record（连接建立），双方进入 ESTABLISHED 状态，此后转发线程方可转发其数据包 。
 
-握手过程中的密钥（secret）校验（详见载荷文档）：
+握手采用**无状态**方式（详见载荷/服务器文档）："SYN?" 阶段服务器只做分配决策并计算验证令牌，**不创建记录**；记录在 "ACK!" 验证通过后才创建（创建即已确认，secret 固定不变）：
 
-- 服务器在**新建** bid record 时生成一个随机数存于 record.pending_secret，随 "SYN!" 下发（载荷文本头 mp-secret 字段，Base64 编码）；若为复用已确认记录的重新握手，则不再重新生成，直接下发原 record.secret（secret 一经确认不再改变，直到记录回收）；
-- 客户端收到后，以 HMAC-SHA256 算法（密钥 = 该 secret，消息 = 载荷数据区全部字节）计算校验值，在 "ACK!" 中回传（载荷文本头 mp-verify 字段）；
-- 服务器校验通过后（校验密钥：pending_secret 存在时用 pending_secret，否则用 record.secret），若记录尚未确认则将密钥转存为 record.secret（删除 pending_secret）、标记连接已建立；若记录已确认则 secret 保持不变；此后所有系统指令（含应答）均须携带 mp-verify，供对端校验。
+- 服务器为本次握手确定 bid 与客户端密钥 secret（复用已确认记录时 secret 取原 record.secret，否则随机生成），以服务器密钥计算验证令牌：token = HMAC-SHA256(key = server_secret, message = UTF-8("bid={bid};socket={socket};secret={secret};time={time}"))，随 "SYN!" 下发（载荷文本头 mp-secret 携带 secret，载荷数据区携带 token 与 token_time）；
+- 客户端收到后**原样回传**（不能篡改，token 只有服务器能校验）："ACK!" 载荷文本头 mp-secret 携带同样的 secret，载荷数据区携带同样的 token 与 token_time（数据区 time 为客户端当前时间）；
+- 服务器先检查 token_time 是否超时（默认 60 秒），再用服务器密钥组重算 token 比对：匹配则创建 bid record（bid → socket、secret 取包内值并固定不变，连接即已确认，此后所有系统指令均须携带 mp-verify）；不匹配则丢弃、不应答。
 
-备注：当服务器回复 "SYN!" 的时候，可以同时附带客户端 socket 信息（载荷数据区，如 ```{"UDP":"12.34.56.78:12345"}```），载荷遵循载荷文档定义的格式（文本头 + 空行 + 数据区）。
+备注：当服务器回复 "SYN!" 的时候，可以同时附带客户端 socket 信息（载荷数据区，如 ```{"UDP":"12.34.56.78:12345"}```）以及验证令牌 token 与 token_time，载荷遵循载荷文档定义的格式（文本头 + 空行 + 数据区）。
 
 ### 客户端 to 客户端
 
@@ -136,7 +136,7 @@ B=0，即协议头不含 bid 字段，表示直接发送，无需服务器 relay
 
 S 检查 target bid 是否存在相应的 socket，以及是否活跃（记录未标记离线 offline，且在 T_active 窗口内有上行数据包；T_active 为“在线”判定窗口，一般小于 2 分钟，与超时回收时效 expires 无关），同时还要检查 source bid 跟当前 socket 是否匹配，以及 (source bid, 当前 socket) 是否在 target 记录的通行证列表中（收件人已通过 "ACPT" 接纳发送方），全部检查通过后将该数据包原样转发（发送方的活跃时间已在预处理阶段更新）；target 离线（offline 标记）时的处理规则见服务器文档。
 
-连接未确认（客户端收到 "SYN!" 后未回 "ACK!"，尚未 ESTABLISHED）时数据包不予转发：转发线程检查 source bid 时发现连接未建立，即以 "FAIL"（载荷带与 "SYN!" 相同的 socket 信息）通知客户端并丢弃该包。
+连接未建立（记录不存在，含收到 "SYN!" 后未回 "ACK!" 或 "ACK!" 丢失场景）时数据包不予转发：转发线程检查 source bid 时发现记录不存在或 socket 不匹配，即以 "FAIL"（载荷带与 "SYN!" 相同的 socket 信息）通知客户端并丢弃该包；客户端收到后可直接补发 "ACK!"（幂等）或重新握手。
 
 备注：服务器协助转发数据包时无需向发送方回复应答包，发送方可通过接收方自动回复的应答包确认收到。
 
