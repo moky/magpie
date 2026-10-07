@@ -260,9 +260,9 @@ final class BridgePacket extends MessagePacket {
     );
     
     /// 失败
-    /// 1. bid 分配失败：target = 期望的（预订）bid，info 为空；
-    /// 2. 第三次握手包缺失：target = 已分配的 bid，info 为 socket 信息（同 "SYN!"）；
-    /// 3. 无法修改通行证： target = 已分配的 bid，info 为失败的 bid 列表。
+    /// 1. bid 分配失败：target = 期望的（预订）bid，info 仅含 time；
+    /// 2. 第三次握手包缺失：target = 已分配的 bid，info 为 socket 信息（同 "SYN!"，含 time）；
+    /// 3. 无法修改通行证： target = 已分配的 bid，info 为失败的 bid 列表（含 time）。
     factory BridgePacket.fail(Uint8List? info, {
         required int target,  // 客户端 bid（期望或已分配）
         int sn = 0,
@@ -359,7 +359,7 @@ final class BridgePacket extends MessagePacket {
     );
     
     /// 心跳应答
-    /// （packet 为收到的 ping 包；info 为附加信息，默认为 ping.payload ）
+    /// （packet 为收到的 ping 包；info 为应答数据区，遵循载荷文档格式（含 time 与 mp-verify），由调用方构造）
     factory BridgePacket.pong(Magpie packet, [Uint8List? info]) => BridgePacket.create(
         ack: 1,
         
@@ -372,7 +372,7 @@ final class BridgePacket extends MessagePacket {
         
         command: Command.PONG,
         
-        payload: info ?? packet.payload
+        payload: info
     );
     
     /// 第一次挥手
@@ -394,7 +394,7 @@ final class BridgePacket extends MessagePacket {
     );
     
     /// 第二次挥手
-    /// （packet 为收到的 fin 包；info 为附加信息，默认为 fin.payload ）
+    /// （packet 为收到的 fin 包；info 为应答数据区，遵循载荷文档格式（含 time 与 mp-verify），由调用方构造）
     factory BridgePacket.finAck(Magpie packet, [Uint8List? info]) => BridgePacket.create(
         ack: 1,
         
@@ -407,7 +407,26 @@ final class BridgePacket extends MessagePacket {
         
         command: Command.FIN_ACK,
         
-        payload: info ?? packet.payload
+        payload: info
+    );
+    
+    /// 无操作（保活/自愈）
+    /// 用于意外收到 "FIN!" 时立即回复，以秒级恢复在线状态，无需应答
+    factory BridgePacket.noop(Uint8List? info, {
+        required int source,
+    }) => BridgePacket.create(
+        ack: 0,
+        
+        target: 0,  // 这个包是发给服务器的指令，所以这里 target = 0
+        source: source,
+        
+        sn:    0,
+        index: 0,
+        count: 1,
+        
+        command: Command.NOOP,
+        
+        payload: info
     );
     
     /// 普通数据包，通过服务器转发给接收方
@@ -539,6 +558,7 @@ final class DirectPacket extends MessagePacket {
     //
     //  TODO: 各种指令工厂，不包括 fail(), done(), acpt(), deny()
     //        （跟 BridgePacket 类似，除了没有 target 和 source 参数）
+    //        包括：syn(), synAck(), ack(), ping(), pong(), noop(), fin(), finAck(), data(), copy()
     //
     
 }

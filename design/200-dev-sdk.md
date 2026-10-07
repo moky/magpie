@@ -61,6 +61,7 @@
 |     | pong(magpie)         | pong(magpie)         | 应答参数从 magpie 复制 |
 | 挥手 | fin(source, info)    | fin(info)            |                     |
 |     | finAck(magpie)       | finAck(magpie)       | 应答参数从 magpie 复制 |
+| 无操作 | noop(source)       | noop()               | 无操作保活（如意外 "FIN!" 后的自愈回复，无需应答） |
 | 数据 | data(target, source, sn, index, count, payload) | data(sn, index, count, payload) | |
 |     | copy(magpie)         | copy(magpie)         | 应答参数从 magpie 复制 |
 
@@ -68,8 +69,9 @@
 
 1. 第一次握手时可填 source 作为预订（期望）bid，可选（0 = 普通申请；非 0 时新建预订须 > 65535，loopback 重握手复用内定 bid 除外）；预订失败（被占用/非法/服务器已满）时服务器回复 "FAIL" 指令包，由客户端自行决定重新申请或放弃；
 2. 除了 "DATA" 消息包之外（因已被 payload 占用），其余各命令在实现时均可携带一个可选参数 info 放在载荷当作附加信息；
-3. 其中 synAck 命令的 info 为当前客户端的 socket 信息；pong/finAck 默认回填原包载荷；done 的 info 为原请求载荷回显（成功修改通行证时回显原 bid 列表）；fail 的 info 按场景区分（bid 分配失败时为空、连接未确认时为 socket 信息，无法修改通行证时为失败的 bid 列表）；其余命令的 info 默认为空；
-4. 以上方法返回对象均为 MessagePacket，标志位和字段值默认按协议规定设置。
+3. 系统指令的载荷遵循载荷文档定义的格式（文本头 + 空行 + 数据区），所有指令（含应答）的数据区均须携带发送方当前时间 time（浮点秒），不允许为空：其中 synAck 的 info 为当前客户端的 socket 信息（数据区 JSON）；pong/finAck **不再回填原请求载荷**，而是按原请求信息生成应答数据区（time 一律取应答方当前时间，mp-verify 相应重新计算）；done 的数据区回显原请求中的 bid 列表（sources），time 取服务器当前时间；fail 的 info 按场景区分（bid 分配失败时仅含 time、连接未确认时为 socket 信息（含 time）、无法修改通行证时为失败的 bid 列表（含 time））；noop 的 info 仅含 time；其余命令的 info 默认为空；
+4. 载荷文本头字段由工厂方法按场景自动生成：Content-Type 一律为 application/json（当前所有指令数据区均为 JSON）；synAck 携带 mp-secret（新生成的随机密钥，Base64）；ack 及此后所有系统指令（含应答）携带 mp-verify（HMAC-SHA256，对数据区全部字节计算，Base64）；done 与 fail 一律携带 mp-src-command 回显被应答的原请求 command（done 回显 ACPT/DENY；fail 按场景回显——bid 分配失败为 "SYN?"、连接未确认为被拒数据包的 command（如 "DATA"）、无法修改通行证为 ACPT/DENY）。客户端与服务器需各自持有并管理 secret（见载荷文档）；
+5. 以上方法返回对象均为 MessagePacket，标志位和字段值默认按协议规定设置。
 
 ### 消息包解析器
 

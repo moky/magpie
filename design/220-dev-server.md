@@ -8,7 +8,7 @@
 
 1. 服务器通过一个**接收线程**从绑定的 UDP 端口中读取数据包，然后直接放入等待处理队列；
 2. **预处理线程**从前面的等待处理队列取出数据包，进行简单的校验之后，根据 target bid 决定是转交给“管理线程”处理，还是转交给“转发线程”处理；
-3. 服务器有一个**管理线程**，专门负责 bid 的分配管理、超时记录回收（purge）、通行证管理（ACPT/DENY），以及几个系统命令的应答；
+3. 服务器有一个**管理线程**，专门负责 bid 的分配管理、超时记录回收（未确认记录的 syn_set 高频扫描 + 常规记录的 purge）、通行证管理（ACPT/DENY），以及几个系统命令的应答；
 4. 服务器有 W 个**转发线程**，专门负责转发数据。
 
 ### 注意事项
@@ -22,9 +22,10 @@
 	- source bid = 0 且 target bid ≠ 0 属于服务端上行校验规则（客户端不得伪造服务器下发包），判定后直接丢弃；
 		- B=1 时 target bid 和 source bid 非 0 时不能相等，即服务器转发包不能发往同一个客户端（同时为 0 是第一次握手包，这个属于例外），判定后直接丢弃；
 2. **管理线程**需要检查 command 及 source bid：
-	- 如果 command 是 "SYN?"，则为第一次握手（唯一允许 source bid 无内存记录的场景）：source bid 非 0 时一律走预订流程（无论来源是否 loopback，先检查是否合法且未被占用，失败则回复 "FAIL" 指令包）；source bid 为 0 时，loopback 来源按内定规则分配 bid = port，其余来源分配新 bid；
-	- 否则 source bid 必须跟内存记录（socket 信息）匹配，然后根据 command 值进行相应的处理和应答（ACPT/DENY 按通行证管理流程处理，"PING" 回 "PONG"，"FIN?" 挥手删记录，详见架构文档）；
-3. **转发线程**需要检查两个 bid，只有 socket 信息匹配才会转发；其中 source bid 还须已完成第三次握手（ACK!），且 (source bid, 当前 socket) 须在 target 记录的通行证列表中（收件人已通过 "ACPT" 接纳发送方），连接未确认时以 "FAIL"（载荷带 socket 信息，与 "SYN!" 相同）通知客户端；
+	- 如果 command 是 "SYN?"，则为第一次握手（唯一允许 source bid 无内存记录的场景）：source bid 非 0 时一律走预订流程（无论来源是否 loopback，先检查是否合法且未被占用，失败则回复 "FAIL" 指令包）；source bid 为 0 时，loopback 来源按内定规则分配 bid = port，其余来源分配新 bid；分配成功后生成一个随机数存于记录（pending_secret），随 "SYN!" 下发（载荷文本头 mp-secret，Base64 编码）；
+	- 如果 command 是 "ACK!"，则为第三次握手：校验 "ACK!" 载荷文本头 mp-verify（HMAC-SHA256，对数据区全部字节计算，与记录中的 pending_secret 比对）；通过后将密钥转存为 record.secret（删除 pending_secret）、清除 offline 标记，并标记该记录为已确认（acknowledged，连接建立）；
+	- 否则 source bid 必须跟内存记录（socket 信息）匹配；凡 record.secret 已建立后收到的系统指令（"SYN?" 除外），须先校验载荷文本头 mp-verify，校验失败视为不可信来源直接丢弃、不应答；然后根据 command 值进行相应的处理和应答（ACPT/DENY 按通行证管理流程处理，"PING" 回 "PONG"，"FIN?" 先将记录标记为离线 offline，再回 "FIN!" 挥手应答——不删除记录、不立即释放 bid，详见架构文档）；
+3. **转发线程**需要检查两个 bid，只有 socket 信息匹配才会转发；其中 source bid 还须已完成第三次握手（ACK!），连接未确认时以 "FAIL"（载荷带 socket 信息，与 "SYN!" 相同）通知客户端；target 记录不存在则直接丢弃；target 记录标记离线（offline）时——发送方已被收件人接纳（(source bid, 当前 socket) 在 target 记录的通行证列表中）则回复 "FAIL"（数据区说明对端离线）通知发送方，否则静默丢弃；转发前还须确认 (source bid, 当前 socket) 在 target 记录的通行证列表中（收件人已通过 "ACPT" 接纳发送方），否则静默丢弃（不应答、不转发，防止暴露收件人的存在与接纳状态）；
 
 ## Bridge ID 管理
 
@@ -64,6 +65,9 @@ bid (32位无符号整数) 由高 16 位无符号整数 H 和低 16 位无符号
 - socket 信息
 - last_time  // 最后活跃时间
 - acknowledged  // 是否已完成第三次握手（ACK!），置位后连接才算 established
+- pending_secret  // 握手密钥（待确认）：服务器分配/复用 bid 后生成，随 "SYN!" 下发，客户端 "ACK!" 回传校验值通过后转正
+- secret  // 握手密钥（已确认）：双方共享，用于此后所有系统指令（含应答）的 HMAC-SHA256 校验（mp-verify）
+- offline  // 离线标记：收到 "FIN?" 后置位（记录保留、bid 不立即释放，仍按超时规则回收）；任何上行数据清除该标记并更新 last_time
 - passes  // 通行证列表：本记录持有者已接纳的发送方 (bid, socket) 集合（允许向持有者发数据的白名单），由 ACPT/DENY 指令维护；随记录回收（purge）自动删除，无需额外清理
 
 > key 为 socket 信息的字符串形式（"{ip}:{port}"），创建记录时生成一次即可；由于 ip 和 port 固定不变，后续查询时直接取用该字段，无需每次重新拼接。
@@ -91,12 +95,44 @@ bid (32位无符号整数) 由高 16 位无符号整数 H 和低 16 位无符号
 	3. 如果存在 bid 相同但 socket 信息不同的记录，则判定为冲突，无法占用此 bid，需重新生成 bid 并再次检查冲突（重试达到 M 次仍冲突，则由管理线程回复 "FAIL" 指令包，见生成规则第 6 条）。
 
 > 每次新建分配记录时，都需要同时建立两个索引（分别以 bid、socket 信息为 key）指向该记录，以方便后面查询。
+> 无论新建、复用还是内定/预订产生的记录，只要回复 "SYN!"，管理线程都会重新生成一个随机数存入记录（pending_secret），随 "SYN!" 载荷文本头下发（mp-secret，Base64 编码）；待客户端 "ACK!" 回传校验值（mp-verify）并通过校验后，转存为 record.secret（见管理线程职责）。
 
-管理线程空闲时，调用 purge(now) 函数删除所有 ```last_time < now - expires``` 的记录（同时删除对应的 bid 和 socket 信息索引）以回收其所占用的 bid。
+管理线程空闲时，按以下两条路径执行回收职责（均同时删除对应的 bid 和 socket 信息索引）：
+
+**（1）syn_set 高频扫描（防洪核心，未确认记录的回收）**
+
+管理线程内部维护一个**私有集合 syn_set**（用哈希集合实现，add/remove 均 O(1)），存放所有"尚未完成握手"（未收到 "ACK!"、acknowledged 未置位）的 bid：
+
+- 创建/复用 bid 记录并回复 "SYN!" 时，将该 bid 加入 syn_set（幂等：重复 add 无害，预订复用同一 bid 时无需额外处理）；
+- 收到 "ACK!" 且校验通过（acknowledged 置位）时，将该 bid 移出 syn_set；
+- 扫描时先**复制 syn_set 快照**（复制成本可忽略：正常同时握手的只有几十~几百条；洪水极端 100 万条也仅 10~20 ms/轮），再逐个调用内部方法 recyclePending(bid) 检查回收——这样遍历期间无需长持锁，管理线程的 add/remove 不被阻塞。
+
+recyclePending(bid)（BidManager 内部方法，幂等）：
+
+1. 持有 BidManager 锁，按 bid 查询分配记录；
+2. 记录不存在 → 返回 False（调用方将该 bid 移出 syn_set，防止集合残留"僵尸"bid——purge 等路径删除记录后由这里自愈）；
+3. 记录已 acknowledged → 返回 False（竞态防护：避免"刚收到 "ACK!" 却被删除"——ACK! 处理与 recyclePending 共用同一把 BidManager 锁，二者互斥，不会误删刚完成的握手）；
+4. 记录未超时（```last_time >= now - handshake_pending_timeout```，默认 10 秒）→ 返回 False（保留）；
+5. 否则删除记录 → 返回 True（由调用方将该 bid 移出 syn_set）。
+
+扫描循环的 sleep 分三档：
+
+- syn_set 为空：sleep **2 秒**（没有可过期的对象，尽量少空转；新 bid 最迟 2 秒后被纳入扫描，10 秒有效期内无影响）；
+- 非空但本轮无回收：sleep **1 秒**（有记录在"倒计时"，1 秒间隔把回收滞后压到 1 秒内）；
+- 本轮有回收：**立即进入下一轮**（洪水时自动保持高频，连续扫到一轮无回收为止）。
+
+未确认记录的**最坏滞留时间 = handshake_pending_timeout + 1 秒 ≈ 11 秒**；洪水稳态存量 ≈ 攻击速率 × 11 秒。
+
+**（2）purge(now) 低频回收（常规超时记录）**
+
+purge(now) 只负责回收超过 expires（默认 24 小时）的记录（```last_time < now - expires```），调用间隔默认 10 分钟，可通过配置文件 record_recycle_interval 调整。未确认记录的回收已由 syn_set 高频扫描承担，purge 不再参与，因此 10 分钟一次的全表遍历成本可以忽略：正常运营时分配表规模为在线用户数（万级），一次遍历毫秒级；即使极端到百万条记录（洪水场景下未确认记录已被 syn_set 及时清除、不会滞留到 24 小时），一次遍历也仅 10~50 ms，10 分钟一次的摊销 CPU 占比不足 0.01%。purge 实现上分两阶段：第一阶段**只读遍历**分配表、收集过期记录（不写，仅短暂共享读锁），第二阶段再**逐条删除**，以缩短持锁时间。
+
 > 回收时效默认 24 小时（expires = 3600 * 24，秒），可通过配置文件 record_expires 调整；
+> 未确认握手短超时（默认 10 秒）可通过配置文件 handshake_pending_timeout 调整。
 
-即该 socket 超过回收时效（默认 24 小时）没有上行数据便可以判定过期并回收；
-另 purge(now) 调用间隔默认不小于 10 分钟（600 秒），可通过配置文件 record_recycle_interval 调整。
+- **不做惰性回收**：管理线程在按 bid 或 socket 信息查询分配表时**不检查是否过期**（只要记录存在就按存在处理，分配与冲突判定逻辑保持简单）；过期记录的回收统一由上述两条路径完成。洪水创建的"僵尸"未确认记录被查询路径恰好命中的概率极小（bid 空间 2^32，命中概率与未确认记录数/总空间同阶），为此引入额外的过期判断分支收益极小、得不偿失；
+- **未确认记录上限（内存保护）**：syn_set 的大小达到 unconfirmed_record_limit（默认 1000000）时，新的 "SYN?" 直接丢弃、不应答（syn_set 的 size 查询是 O(1)，上限判断零成本）。该上限仅用于防止极端情况下的内存失控（每条未确认记录约几十字节，100 万条约 64 MiB）。要打满此上限，攻击者需以约 23 MB/s 的维持流量（按最小载荷 256 字节、最坏滞留 11 秒计，约 10 万 "SYN?"/秒）持续灌注伪造来源的握手包——达到该强度的攻击已会先打满单机 CPU（每包分配+回包约 1~2 µs，10 万包/秒占 10~20% 单核）与带宽，**内存上限并非最先失效的防线**，它只负责"CPU 与带宽被打满之前，内存不被堆爆"。更高强度的握手洪流（G 级）属运维层（防火墙包速率限制、流量清洗、Anycast/带宽冗余）的范畴，单机应用无法在协议层抵御；协议层不为此牺牲正常客户端（不缩短有效时间、不提高最小载荷），防洪水由 handshake_min_payload（防放大）、syn_set 高频回收与内存保护上限共同承担。
+- 按来源 IP 的 "SYN?" 限速在 UDP 下可被伪造来源地址绕过，不作为协议层防洪水手段。
 
 > 注：“在线”判定窗口 T_active（见工作流文档，默认 2 分钟，可通过配置文件 record_active_timeout 调整）与回收时效 expires（默认 24 小时，可通过配置文件 record_expires 调整）是两个不同的参数：T_active 用于转发线程判断记录是否活跃（在线），expires 用于管理线程回收超时记录。
 
@@ -185,12 +221,30 @@ forward_window = 0.1
 # traffic for longer than this (seconds, default: 86400.0 = 24 hours)
 record_expires = 86400.0
 # minimum interval between two purge(now) runs (seconds, default:
-# 600.0 = 10 minutes)
+# 600.0 = 10 minutes; purge only recycles records that exceeded
+# record_expires, so a full-table scan is rare and cheap; unconfirmed
+# handshake records are recycled by the high-frequency syn_set scan
+# instead, see the server doc)
 record_recycle_interval = 600.0
 # online judging window: the forwarder drops the target when its
 # record has been inactive for longer than this (seconds, default:
 # 120.0 = 2 minutes)
 record_active_timeout = 120.0
+# handshake flood guard: minimum payload length of the first
+# handshake packet "SYN?" (bytes, default: 256)
+handshake_min_payload = 256
+# handshake pending timeout: an unconfirmed bid record (the client
+# sent "SYN?" but has not completed "ACK!") is considered expired
+# when it has been inactive for longer than this (seconds, default:
+# 10.0; the syn_set scan reclaims it within ~1 second afterwards, so
+# the worst-case lifetime is about 11 seconds)
+handshake_pending_timeout = 10.0
+# unconfirmed record limit (memory protection only): when the number
+# of unconfirmed bid records (syn_set size) reaches this limit, new
+# "SYN?" packets are dropped silently (default: 1000000; about 64 MiB
+# at ~64 bytes per record; sustaining this limit needs roughly
+# 23 MB/s of forged handshake traffic, see the server doc)
+unconfirmed_record_limit = 1000000
 # bid allocation retries: treat the server as full after M conflicts
 # (default: 16)
 bid_allocation_retries = 16
