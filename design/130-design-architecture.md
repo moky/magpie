@@ -26,16 +26,14 @@
 - 先对协议头进行校验，有任何错误就直接丢弃退出；
 - 校验标志位 B=1（服务器只处理桥接包，B=0 的直连包不会发给服务器），否则直接丢弃退出；
 - 取出 target bid，如果为 0 则交给管理线程（结束本包处理，由管理线程继续检查 source、command 等信息）；
-- 取出 source bid：target 非 0 而 source 为 0 属于上行校验违规，直接丢弃退出（校验规则见服务器设计）；
-- 接着检查其对应的 socket 信息与 yellow_pages 中的记录是否匹配，不匹配则直接丢弃退出；
-- 匹配一致则更新其活跃时间，然后指派给相应的转发线程等待处理。
+- 取出 source bid：如果为 0 或与 target bid 相等，则属于上行校验违规，直接丢弃退出（校验规则见服务器设计）；
+- 其余情况（target 与 source 均非 0 且不相等的转发包）直接按 source bid 哈希指派给相应的转发线程等待处理——来源 socket 的绑定一致性校验、活跃时间更新以及转发/应答逻辑均在转发线程内完成（见转发线程）；
 
-备注： source bid 为 0 时 target bid 也必定为 0，这种情况只会在“第一次握手包”中存在；
-反之则属于上行校验违规，直接丢弃（校验规则见服务器设计）。
+备注： source bid 为 0 时 target bid 也必定为 0，这种情况只会在“第一次握手包”中存在。
 
 ### 2. 管理线程
 
-从管理请求队列中取出数据包，然后判断是哪种类型的请求；若无法识别为下列任一类型（未知 command），直接丢弃退出。
+从管理请求队列中取出数据包，然后判断是哪种类型的请求；若无法识别为下列任一类型（未知 command），直接丢弃退出；凡来源 socket 已绑定 bid Z 但 source bid ≠ Z 的系统指令（"SYN?" 与 "ACK!" 除外：前者无记录、后者走无状态令牌验证），判定为伪造来源直接丢弃、不应答；凡来源 socket 无绑定且 source bid 无匹配记录（记录不存在，或记录中 socket 与当前来源不同——bid 与 socket 一一对应、两者等价）的其他系统指令，按“连接未确认”处理：回复 "FAIL"（载荷同转发线程——数据区为服务器观察到的来源地址 ```{"UDP":"ip:port","time":...}```，文本头回显被拒指令的 command，不带 mp-verify）通知客户端（据此补发 "ACK!" 或重新握手），然后丢弃该包；
 如果管理请求队列为空（管理线程空闲），则执行回收职责：按 record_recycle_interval（默认 10 分钟）调用 purge(now) 回收超过 expires 的常规记录（详见服务器文档）。
 
 > 校验前置：凡 record.secret 已建立（连接已确认）后收到的系统指令（"SYN?" 与 "ACK!" 除外：前者无记录、后者走无状态令牌验证），须先校验其载荷文本头 mp-verify（HMAC-SHA256，对数据区全部字节计算，与 record.secret 比对）；校验失败视为不可信来源，直接丢弃、不应答。见载荷文档。
@@ -47,13 +45,14 @@
 
 处理流程（本阶段**不创建任何记录**，仅做分配决策并下发验证令牌，分配规则详见服务器文档）：
 
-- 先根据 socket 信息查询内存分配表：如果记录存在（socket 信息一定匹配），则复用该记录中的 bid（重新握手，secret 取原 record.secret，无需再检查 source bid）；
+- 先根据 socket 信息查询内存分配表：如果记录存在，则复用该记录中的 bid（重新握手，secret 取原 record.secret，无需再检查 source bid）；
 - 否则取出 source bid：
-	- 如果非 0（客户端预订，无论来源是否 loopback），则走预订流程：先检查该 bid 是否已有匹配记录（记录存在且 socket 信息相同，例如 loopback 客户端重新握手时携带之前的内定 bid），有则直接复用该 bid（secret 取原 record.secret）；否则检查该 bid 是否合法（必须大于 65535，不能预订保留给 loopback 的内定区间）：不合法则直接回复 "FAIL" 指令包；合法则继续检查是否被其他 socket 占用——未被占用则采用该 bid，已被占用则直接回复 "FAIL" 指令包（由客户端决定是否重新申请）；
+	- 如果非 0（客户端预订，无论来源是否 loopback），则走预订流程：先检查该 bid 是否合法（必须大于 65535，不能预订保留给 loopback 的内定区间）：不合法则直接回复 "FAIL" 指令包；合法则按该 bid 查表——当前 socket 已确认无绑定记录（见上一步），故记录存在则其 socket 必不相同（该 bid 已被其他 socket 占用），直接回复 "FAIL" 指令包（由客户端决定是否重新申请）；记录不存在（空闲）则采用该 bid；
 	- 如果为 0：
 		- 来源 IP 为环回地址（loopback: 127.0.0.0/8, ::1/128）时，按内定规则分配 bid = port（若该 bid 已被其他 socket 占用，直接回复 "FAIL" 指令包）；
 		- 否则按分配规则生成一个新 bid（分配不成功则回复 "FAIL" 指令包）；
-- 生成客户端密钥 secret（新建/内定/预订时随机生成；复用已确认记录时取原 record.secret），并以服务器密钥对其关键信息计算验证令牌 token = HMAC-SHA256(key = server_secret, message = UTF-8("bid={bid};socket={socket};secret={secret};time={time}"))（Base64 编码，详见服务器文档密钥轮换），然后回复 "SYN!" 包：载荷文本头携带 mp-secret（Base64 编码的 secret），载荷数据区携带 socket 信息、token 与 token_time（服务器生成时间）——本阶段不登记 socket、不创建记录，转发线程因查不到记录仍不转发其数据包，等待客户端在 "ACK!" 中回传（见 2.1）。
+- 生成客户端密钥 secret（新建/内定/预订时随机生成，须用密码学安全随机数；复用已确认记录时取原 record.secret），并以服务器密钥对其关键信息计算验证令牌 token = HMAC-SHA256(key = server_secret, message = UTF-8(规范字符串))（Base64 编码；规范字符串为按 key 字典序排序的键值对，如 "bid=123&secret=YWJj&socket=1.2.3.4:5678&time=123"，详见服务器文档密钥轮换），
+  - 然后回复 "SYN!" 包：载荷文本头携带 mp-secret（Base64 编码的 secret），载荷数据区携带 socket 信息、token 与 token_time（服务器生成时间）——本阶段不登记 socket、不创建记录，转发线程因查不到记录仍不转发其数据包，等待客户端在 "ACK!" 中回传（见 2.1）。
 
 #### 2.1. 第三次握手（无状态验证 + 创建记录）
 
@@ -62,9 +61,9 @@
 
 处理流程（记录尚未创建，验证完全基于令牌，不依赖任何服务器状态）：
 
-1. 先检查载荷数据区 token_time 是否超出有效窗口（handshake_token_timeout，默认 60 秒）：超时则回复 "FAIL" 指令包（客户端重新握手）；
-2. 用服务器密钥组（最多 2 个，见服务器文档密钥轮换）对 "bid={协议头 source bid};socket={服务器观察到的来源 ip:port};secret={载荷包头 mp-secret};time={数据区 token_time}" 逐个重算 HMAC-SHA256（Base64）并与数据区 token 比对：全部不匹配则判定为不可信来源，直接丢弃、不应答（客户端将重发 "SYN?" 重新握手）；
-3. 匹配则按协议头 source bid 查内存分配表：
+1. 先用服务器密钥组（最多 2 个，见服务器文档密钥轮换）对 "bid={协议头 source bid}&secret={载荷包头 mp-secret}&socket={服务器观察到的来源 ip:port}&time={数据区 token_time}"（按 key 字典序排序的键值对）逐个重算 HMAC-SHA256（Base64）并与数据区 token 比对：全部不匹配则判定为不可信来源，直接丢弃、不应答（攻击者无法伪造 token，故无法触发任何应答）；
+2. 匹配（说明包确为服务器签发、未被篡改）后再检查载荷数据区 token_time 是否超出有效窗口（handshake_token_timeout，默认 60 秒）：超时则回复 "FAIL" 指令包（客户端重新握手）；
+3. 未超时则按协议头 source bid 查内存分配表：
 	- 记录不存在：创建 bid record（bid → socket、secret 取包内 mp-secret 并固定不变），连接即已确认，此后转发线程方可转发其数据包；
 	- 记录已存在且 socket 信息匹配（重复 "ACK!" 或重新握手场景）：幂等处理，更新其活跃时间、清除 offline 标记，secret 保持不变（不覆盖、不轮换）；
 	- 记录已存在但 socket 信息不同（bid 竞态冲突）：回复 "FAIL" 指令包，客户端重新握手。
@@ -112,9 +111,10 @@
 
 - 轮询其辖下的 source bid，如果对应的等待转发队列不为空则取出最前面的数据包；
 - 如果当前所有的 bid 都没有等待转发任务，则 sleep 一小段时间后继续下一个循环；
-- 取出该包中的 source bid，检查 yellow_pages 中的记录存在、socket 信息匹配（记录创建即已确认，无需再检查握手状态）；记录不存在或 socket 不匹配（连接未建立/未确认，含 "ACK!" 丢失场景）则以 "FAIL"（载荷带 socket 信息，与 "SYN!" 相同）通知客户端并丢弃该包；
+- 先按来源 socket 查询内存分配表：记录存在（该 socket 已绑定 bid Z）时，要求 source bid 必须等于 Z——否则判定为伪造来源（socket 已被占用却上报其他 bid），直接丢弃该包、不应答；匹配一致则更新发送方记录的活跃时间；
+- 记录不存在（来源 socket 无绑定，例如 "ACK!" 丢失后客户端尚未完成握手）时，按 source bid 查表：无匹配当前来源的记录（记录不存在，或记录中 socket 与当前来源不同——bid 与 socket 一一对应、来源 socket 无绑定时两者等价，客户端换网络即属后一种）则以 "FAIL"（载荷带服务器观察到的来源地址，UDP 字段格式同 "SYN!"）通知客户端并丢弃该包；
 - 取出该包中的 target bid，检查 yellow_pages 中的记录是否存在，不存在则直接丢弃，进入下一个循环；
-- 若 target 记录不活跃（已标记离线 offline，或 last_time 超过 T_active 在线判定窗口、默认 120 秒）：当 (source bid, 当前 socket) 在该记录的通行证列表中（发送方已被收件人接纳）时，回复 "FAIL"（载荷遵循载荷文档格式，数据区说明对端离线）通知发送方，然后丢弃；否则静默丢弃（不应答、不转发，防止暴露收件人的存在与接纳状态），进入下一个循环；
+- 若 target 记录不活跃（已标记离线 offline，或 last_time 超过 T_active 在线判定窗口、默认 60 秒）：当 (source bid, 当前 socket) 在该记录的通行证列表中（发送方已被收件人接纳）时，回复 "FAIL"（载荷遵循载荷文档格式：数据区仅含 time ```{"time":...}```，文本头 mp-src-command 回显被拒数据包的 command（如 "DATA"）并携带收件人 bid（mp-src-target: 十进制整数），携带 mp-verify——发送方记录已确认、服务器有发送方的 secret，可计算校验值）通知发送方，然后丢弃；否则静默丢弃（不应答、不转发，防止暴露收件人的存在与接纳状态），进入下一个循环；
 - 检查 (source bid, 当前 socket) 是否在 target 记录的通行证列表中（收件人已通过 "ACPT" 接纳发送方），否则静默丢弃（不应答、不转发，防止暴露收件人的存在与接纳状态）进入下一个循环；
 - 将该数据包通过绑定的 UDP 接口发送给 target bid 所对应的 socket；
 

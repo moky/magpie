@@ -560,9 +560,9 @@ final class DirectPacket extends MessagePacket {
     );
     
     //
-    //  TODO: 各种指令工厂，不包括 fail(), done(), acpt(), deny()
-    //        （跟 BridgePacket 类似，除了没有 target 和 source 参数）
-    //        包括：syn(), synAck(), ack(), ping(), pong(), noop(), fin(), finAck(), data(), copy()
+    //  TODO: 各种指令工厂（跟 BridgePacket 类似，除了没有 target 和 source 参数）
+    //        包括：syn(), synAck(), ack(), fail(), done(), ping(), pong(), fin(), finAck(), noop(), data(), copy()
+    //        不包括 acpt(), deny()（锁死 B=1，仅服务器场景）
     //
     
 }
@@ -641,7 +641,6 @@ final class MessageParser implements MagpieParser {
 	    // 2. 头参数的有效性检查
 	    //    根据 flags 指示依次读出 target, source, sn, index, count, command 等参数；
 	    //    检查各项参数是否越界；
-	    //    若 B=1 且 target 与 source 均非 0 且相等（转发包发往同一客户端），判定为错误包；
 	    //    若 C=1，则 command 必须非 0（全 0 判定为错误包）；不校验 command 的具体取值（是否系统指令由上层判断）；
 	    
 	    // 3. 读取 payload，然后创建消息包对象
