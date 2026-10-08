@@ -24,8 +24,8 @@
 2. **管理线程**需要检查 command 及 source bid：
 	- 如果 command 是 "SYN?"，则为第一次握手（唯一允许 source bid 无内存记录的场景）：先根据 socket 信息查表——记录存在（socket 匹配）则复用该 bid（重新握手，secret 取原 record.secret）；否则 source bid 非 0 时一律走预订流程（无论来源是否 loopback，先检查是否合法且未被占用，失败则回复 "FAIL" 指令包）；source bid 为 0 时，loopback 来源按内定规则分配 bid = port，其余来源分配新 bid（均不创建记录）；然后生成客户端密钥 secret（复用场景取原 record.secret，否则随机生成），以服务器密钥对其关键信息（bid、socket、secret、当前时间）计算 HMAC-SHA256 得到 token，随 "SYN!" 下发（载荷文本头 mp-secret 携带 secret，数据区携带 token 与 token_time，Base64 编码）——此阶段服务器**不创建任何记录**（无状态），记录在 "ACK!" 验证通过后才创建；
 	- 如果 command 是 "ACK!"，则为第三次握手（无状态验证）：先用服务器密钥组（最多 2 个，见密钥轮换）对 "bid={协议头 source}&secret={载荷包头 mp-secret}&socket={服务器观察到的来源 ip:port}&time={数据区 token_time}"（按 key 字典序排序的键值对）重算 HMAC-SHA256（Base64）并与数据区 token 比对，全部不匹配则判定为不可信来源，直接丢弃、不应答（攻击者无法伪造 token，故无法触发任何应答）；匹配（说明包确为服务器签发、未被篡改）后再检查 token_time 是否超出有效窗口（handshake_token_timeout，默认 60 秒），超时则回复 "FAIL" 指令包（客户端重新握手）；否则按协议头 source bid 查表：记录不存在则创建 bid record（bid → socket、secret 取包内 mp-secret 并固定不变，连接即已确认）；记录已存在且 socket 匹配则幂等更新（重复 "ACK!" 或重新握手场景）；记录已存在但 socket 不同（bid 竞态冲突）则回复 "FAIL" 指令包（客户端重新握手）；
-	- 否则先按来源 socket 查询内存分配表：记录存在（socket 已绑定 bid Z）时要求 source bid 必须等于 Z，否则判定为伪造来源直接丢弃、不应答；记录不存在（来源 socket 无绑定）时，source bid 无匹配记录（记录不存在，或记录中 socket 与当前来源不同——bid 与 socket 一一对应、两者等价）则按“连接未确认”回复 "FAIL" 指令包（载荷同转发线程：数据区为服务器观察到的来源地址，文本头回显被拒指令的 command，不带 mp-verify），客户端据此补发 "ACK!" 或重新握手；凡 record.secret 已建立后收到的系统指令（"SYN?" 与 "ACK!" 除外：前者无记录、后者走无状态令牌验证），须先校验载荷文本头 mp-verify，校验失败视为不可信来源直接丢弃、不应答；然后根据 command 值进行相应的处理和应答（ACPT/DENY 按通行证管理流程处理，"PING" 回 "PONG"，"FIN?" 先将记录标记为离线 offline，再回 "FIN!" 挥手应答——不删除记录、不立即释放 bid，详见架构文档）；
-3. **转发线程**对转发包先按来源 socket 查询内存分配表：记录存在（该 socket 已绑定 bid Z）时要求 source bid 必须等于 Z，否则判定为伪造来源直接丢弃、不应答；匹配一致则更新发送方记录的活跃时间；记录不存在（来源 socket 无绑定，例如 "ACK!" 丢失后客户端尚未完成握手）时按 source bid 查表——无匹配当前来源的记录（记录不存在，或记录中 socket 与当前来源不同——bid 与 socket 一一对应、两者等价）时以 "FAIL"（载荷带服务器观察到的来源地址，UDP 字段格式同 "SYN!"）通知客户端并丢弃；source bid 有效后，再检查 target：target 记录不存在则直接丢弃；target 记录不活跃（已标记离线 offline，或 last_time 超过 T_active 在线判定窗口、默认 60 秒）时——发送方已被收件人接纳（(source bid, 当前 socket) 在 target 记录的通行证列表中）则回复 "FAIL"（载荷遵循载荷文档格式：数据区仅含 time ```{"time":...}```，文本头 mp-src-command 回显被拒数据包的 command（如 "DATA"）并携带收件人 bid（mp-src-target: 十进制整数），携带 mp-verify——发送方记录已确认、服务器有发送方的 secret）通知发送方，否则静默丢弃；转发前还须确认 (source bid, 当前 socket) 在 target 记录的通行证列表中（收件人已通过 "ACPT" 接纳发送方），否则静默丢弃（不应答、不转发，防止暴露收件人的存在与接纳状态）；
+	- 否则（其他系统指令，要求 source bid > 0）：source bid 为 0 属于上行校验违规，直接丢弃；先按来源 socket 查询内存分配表：记录存在（socket 已绑定 bid Z）时要求 source bid 必须等于 Z，否则判定为伪造来源直接丢弃、不应答；记录不存在（来源 socket 无绑定）时，检查 command 是否 PING/ACPT/DENY（只有这 3 条指令需要错误提示）：是则先检查载荷长度是否达到最低要求 ```manager_min_payload```（默认 100 字节）——达到则按“连接未确认”回复 "FAIL" 指令包（载荷同转发线程：数据区为服务器观察到的来源地址，文本头回显被拒指令的 command，不带 mp-verify，考虑到防放大攻击的需要，不带 Content-Type 和 Content-Length），客户端据此补发 "ACK!" 或重新握手；未达到则静默丢弃；其他指令（NOOP/FIN?）静默丢弃、不应答；凡 record.secret 已建立后收到的系统指令（"SYN?" 与 "ACK!" 除外：前者无记录、后者走无状态令牌验证），须先校验载荷文本头 mp-verify，校验失败视为不可信来源直接丢弃、不应答；然后根据 command 值进行相应的处理和应答（ACPT/DENY 按通行证管理流程处理，"PING" 回 "PONG"，"FIN?" 先将记录标记为离线 offline，再回 "FIN!" 挥手应答——不删除记录、不立即释放 bid，"NOOP" 清除 offline 标记后不应答，详见架构文档）；
+3. **转发线程**对转发包先按来源 socket 查询内存分配表：记录存在（该 socket 已绑定 bid Z）时要求 source bid 必须等于 Z，否则判定为伪造来源直接丢弃、不应答；匹配一致则更新发送方记录的活跃时间；记录不存在（来源 socket 无绑定，例如 "ACK!" 丢失后客户端尚未完成握手或客户端换网络）时，先判断协议 payloadLength 是否达到防放大门槛 unconfirmed_min_payload（默认 256 字节）：未达到则静默丢弃（防放大攻击）；达到则以 "FAIL"（载荷数据区为服务器观察到的来源地址，UDP 字段格式同 "SYN!"，文本头带 mp-src-command 回显被拒指令的 command，不带 mp-verify）通知客户端并丢弃；source bid 有效后，再检查 target：target 记录不存在则直接丢弃；target 记录不活跃（已标记离线 offline，或 last_time 超过 T_active 在线判定窗口、默认 60 秒）时——发送方已被收件人接纳（(source bid, 当前 key) 在 target 记录的通行证列表中）则回复 "FAIL"（载荷遵循载荷文档格式：数据区仅含 time ```{"time":...}```，文本头 mp-src-command 回显被拒数据包的 command（如 "DATA"）并携带收件人 bid（mp-src-target: 十进制整数），携带 mp-verify——发送方记录已确认、服务器有发送方的 secret）通知发送方，否则静默丢弃；转发前还须确认 (source bid, 当前 key) 在 target 记录的通行证列表中（收件人已通过 "ACPT" 接纳发送方），否则静默丢弃（不应答、不转发，防止暴露收件人的存在与接纳状态）；
 
 ## Bridge ID 管理
 
@@ -64,7 +64,7 @@ bid (32位无符号整数) 采用**全随机**方式生成：直接在 `0x000100
 - last_time  // 最后活跃时间
 - secret  // 握手密钥（已确认）：服务器在握手时生成并随 "SYN!" 下发（复用已确认记录时下发原值），"ACK!" 验证通过后创建记录时写入；一经写入不再改变，直到该记录被回收
 - offline  // 离线标记：收到 "FIN?" 后置位（记录保留、bid 不立即释放，仍按超时规则回收）；任何上行数据清除该标记并更新 last_time
-- passes  // 通行证列表：本记录持有者已接纳的发送方 (bid, socket) 集合（允许向持有者发数据的白名单），由 ACPT/DENY 指令维护；随记录回收（purge）自动删除，无需额外清理
+- allowlist  // 通行证列表：本记录持有者已接纳的发送方 (bid, key) 集合（允许向持有者发数据的白名单），由 ACPT/DENY 指令维护；随记录回收（purge）自动删除，无需额外清理
 
 > key 为 socket 信息的字符串形式（"{ip}:{port}"），创建记录时生成一次即可；由于 ip 和 port 固定不变，后续查询时直接取用该字段，无需每次重新拼接。
 
@@ -112,7 +112,7 @@ bid (32位无符号整数) 采用**全随机**方式生成：直接在 `0x000100
 
 由于 "SYN?" 阶段不创建任何记录，握手洪流不产生任何共享状态、不占用内存，防洪由以下手段共同承担：
 
-- **防放大**：要求第 1 次握手包 "SYN?" 载荷不小于 handshake_min_payload（默认 512 字节），使应答 "SYN!" 显著小于请求，攻击者无法以微小请求放大出大流量应答；载荷不足或来源为广播/多播地址的请求直接丢弃、不应答（见预处理线程校验）；
+- **防放大**：要求第 1 次握手包 "SYN?" 载荷不小于 handshake_min_payload（默认 512 字节），使应答 "SYN!" 显著小于请求，攻击者无法以微小请求放大出大流量应答；载荷不足或来源为广播/多播地址的请求直接丢弃、不应答（见预处理线程校验）。转发线程对来源 socket 无绑定记录的数据包（连接未确认场景）单独设防放大门槛 unconfirmed_min_payload（默认 256 字节，见转发线程）——该门槛只针对**无签名**的转发数据包场景（"DATA" 不做每包校验、攻击者伪造成本低）；管理线程对无绑定来源且需回 "FAIL" 的指令（PING/ACPT/DENY）同样设防放大门槛 ```manager_min_payload```（默认 100 字节）：载荷不足直接丢弃、不应答，防止攻击者以微小请求触发 "FAIL" 应答造成反射放大（正常客户端最小指令载荷约 105 字节，高于门槛不受影响；NOOP/FIN? 无应答、无反射风险，无需门槛）；
 - **无状态计算成本**：每次 "SYN?" 仅消耗一次 HMAC 计算与一次 bid 分配决策（只读查表），不落任何内存；洪水主要打满攻击者自身带宽与服务器 CPU，属可线性扩展的正常负载；
 - **token 有效窗口**：token 验证通过后，token_time 超出 handshake_token_timeout（默认 60 秒）的 "ACK!" 回复 "FAIL"，防止旧握手包的重放与滞留；
 - 更高强度的握手洪流（G 级）属运维层（防火墙包速率限制、流量清洗、Anycast/带宽冗余）的范畴，单机应用无法在协议层抵御。
@@ -221,8 +221,26 @@ record_recycle_interval = 600.0
 # 60.0 = 1 minute)
 record_active_timeout = 60.0
 # handshake flood guard: minimum payload length of the first
-# handshake packet "SYN?" (bytes, default: 512)
+# handshake packet "SYN?" (bytes, default: 512; keeps the "SYN!"
+# reply smaller than the request to prevent amplification)
 handshake_min_payload = 512
+# amplification guard for the forwarder: minimum payload length of a
+# packet from a source socket with no bound record (the "connection
+# not confirmed" case, e.g. a lost "ACK!") before the forwarder
+# replies "FAIL"; below this the packet is silently dropped. This
+# guard exists only for the unsigned data plane ("DATA" is not signed
+# per packet, so forged packets are cheap); the manager thread applies
+# its own guard to the unconfirmed "FAIL" reply path, see
+# manager_min_payload below (bytes, default: 256)
+unconfirmed_min_payload = 256
+# amplification guard for the manager thread: minimum payload length
+# of a system command (PING/ACPT/DENY) from a source socket with no
+# bound record (the "connection not confirmed" case, e.g. a lost
+# "ACK!") before the manager replies "FAIL"; below this the packet is
+# silently dropped. NOOP/FIN? never reply, so they need no guard
+# (bytes, default: 100; the smallest legit command payload is about
+# 105 bytes, above the threshold)
+manager_min_payload = 100
 # server secret rotation: a new server secret is generated and put at
 # the head of server_secrets when it has been longer than this since
 # the last rotation; at most the latest 2 secrets are kept for token

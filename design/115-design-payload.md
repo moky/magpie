@@ -26,11 +26,12 @@
 2. **Content-Length** 表示数据区字节数：生成时必选且必须准确；解析时可选（缺省时以 \r\n\r\n 之后剩余的全部字节作为数据区），但若存在则必须与实际数据区长度一致，不一致判定为错误包；
 3. **Content-Type** 表示数据区格式，照搬 HTTP 的 MIME 类型定义（当前所有系统指令的数据区均为 JSON，统一使用 application/json；将来出现其他格式时使用 application/octet-stream、text/plain 等标准值）：生成时必选且必须与实际数据区格式一致；解析时可选（缺省按二进制 application/octet-stream 处理），若声明为 application/json 而数据区无法按 JSON 解析，判定为错误包；
 4. 协议自有参数前缀为 **"mp-"**（如 mp-secret、mp-verify、mp-src-command、mp-src-target），表示载荷子协议自身的参数；magpie 头已能表达的字段（target/source/sn 等）不重复放入数据区；
-5. **time**：所有系统指令（含应答）的数据区均须携带发送方当前时间（浮点秒，如 123.45），用于防重放（具体校验规则见安全文档）；即使某指令用不到其他信息，数据区也至少包含 time，不允许为空；
+5. **time**：所有系统指令（含应答）的数据区均须携带发送方当前时间（秒，整数或小数均可，按现实世界时间戳计，如 1790812800 或 123.45），用于防重放（具体校验规则见安全文档）；即使某指令用不到其他信息，数据区也至少包含 time，不允许为空；
 6. 应答类包一般不回显原请求字段（应答指令与请求一一对应，接收方凭 command 即可识别归属）；仅当应答与请求**非一一对应**时，需要回显原请求字段，使用前缀 **"mp-src-"**（如 mp-src-command: 0x41435054，取原 command 的十六进制形式；mp-src-target: 123456，取原请求 target bid 的十进制形式）——当前需要该字段的为 **"DONE" 与 "FAIL"**：
    - "DONE"：对应 ACPT/DENY 两种请求（成功回 "DONE"），回显原 command 以区分归属；
    - "FAIL"：为多场景复用的通用失败应答，一律回显被应答的原请求 command——bid 分配失败回显 "SYN?"（0x53594E3F）；连接未确认与 target 离线（转发时发现收件人不活跃）均回显被拒数据包的 command（如 "DATA" 0x44415441）；无法修改通行证回显 ACPT/DENY（0x41435054 / 0x44454E59）；其中 target 离线还需额外回显原请求的收件人 bid（mp-src-target: 十进制整数）；
 7. 数据区内容由各指令自行定义（示例中使用 JSON，便于携带多个字段；如追求更小体积可改用二进制编码，文本头字段除 Content-Type 外保持不变）。
+8. **例外（"FAIL" 的简化形态）**：服务器在"连接未确认"场景回复的 "FAIL"（来源 socket 无绑定记录、无 secret，见服务器文档）生成时**省略 Content-Type 与 Content-Length**——数据区边界由空行确定（解析缺省逻辑）、格式由 mp-src-command 回显的指令场景确定，客户端按场景解析不受影响；省略这两个头可缩小该应答的反射体量（防放大攻击，见服务器文档）。其余指令的生成规则见上文。
 
 ### Request
 
@@ -40,15 +41,15 @@
 - target  (Request-Target)
 - version (Protocol-Version)
 - fields
-- data    (Blob)
+- content (Data / Blob)
 
 所有在**鹊桥协议**中 A=0 的数据包 payload 全部归为此类：
 
 | Command | Method  | Target     | Description        |
 |---------|---------|------------|--------------------|
 | "SYN?"  | CONNECT | /bid       | 第1次握手（请求连接） |
-| "ACPT"  | PUT     | /contacts  | 接受（添加通行证）    |
-| "DENY"  | DELETE  | /contacts  | 拒绝（删除通行证）    |
+| "ACPT"  | PUT     | /allowlist | 接受（添加通行证）    |
+| "DENY"  | DELETE  | /allowlist | 拒绝（删除通行证）    |
 | "PING"  | OPTIONS | /last_time | 发起心跳            |
 | "FIN?"  | DELETE  | /bid       | 第1次挥手（请求关闭） |
 | "NOOP"  | HEAD    | /          | 无操作              |
@@ -63,7 +64,7 @@
 - code    (Status-Code)
 - reason  (Reason-Phrase)
 - fields
-- data    (Blob)
+- content (Data / Blob)
 
 所有在**鹊桥协议**中 A=1 的数据包 payload 全部归为此类：
 
@@ -110,7 +111,7 @@
 1. Secret 只会在握手阶段出现（"SYN!" 下发、 "ACK!" 原样回传），由服务器发给客户端；重新握手（复用已确认记录）时下发的仍是原值，不再生成新密钥；
 2. 握手完成后的任何数据包都不会带密钥，只会带校验信息（mp-verify 哈希值）；
 3. 此机制不能防御嗅探级威胁，即如果攻击者在 S 与 A 之间的网络路径上就有可能获取 "SYN!" 内容（token 是认证码而非加密）；
-4. mp-verify 机制仅在双方共享 secret 时使用，当前仅存在于服务器场景（客户端直连尚无 secret，是否引入见安全文档）；无 secret 时相关字段一律不出现；
+4. mp-verify 机制仅在双方共享 secret 时使用，当前仅存在于服务器场景；无 secret 时相关字段一律不出现；
 5. 防重放（时间戳单调性校验等）属安全设计范畴，见安全文档，本文档不展开。
 
 ## 示例
@@ -163,7 +164,7 @@ Content-Length: ...
 ### 示例 1.1 - 创建通行证 "ACPT"
 
 ```
-PUT /contacts MP/1.0
+PUT /allowlist MP/1.0
 mp-verify: {哈希值，Base64 编码}
 Content-Type: application/json
 Content-Length: 34
