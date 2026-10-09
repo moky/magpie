@@ -12,7 +12,7 @@
 
 ```dart
 class MessagePacket implements Magpie {
-    MessagePacket(this.buffer, {
+    MessagePacket(this._buffer, {
         
         required this.ack,
         required this.bid,
@@ -32,11 +32,11 @@ class MessagePacket implements Magpie {
          
         required this.command,
         
-        required this.payload
+        required this.payload,
     });
     
     /// data package
-    Uint8List? buffer;
+    Uint8List? _buffer;
     
     /// flags
     final int ack;
@@ -45,32 +45,35 @@ class MessagePacket implements Magpie {
     final int dsn;
     final int ext;
     
+    /// length
     final int headerLength;
     final int payloadLength;
     
     /// bid
     final int target;
     final int source;
-
+    
     /// mid
     final int sn;
     final int index;
     final int count;
-
+    
+    /// command
     final int command;
     
-    final Uint8List? payload;
+    /// body
+    final Payload payload;
     
     // ...
     
     @override
     Uint8List pack() {
-        Uint8List? binary = buffer;
-        if (binary == null) {
-            // TODO: 将各字段打包为网络字节序，更新 binary，然后缓存到 buffer
-            buffer = binary;
+        Uint8List? data = _buffer;
+        if (data == null) {
+            // TODO: 将各字段打包为网络字节序，更新 data，然后缓存到 buffer
+            _buffer = data;
         }
-        return binary;
+        return data;
     }
 }
 ```
@@ -81,7 +84,7 @@ class MessagePacket implements Magpie {
 
 ```dart
 final class BridgePacket extends MessagePacket {
-    BridgePacket._(super.buffer, {
+    BridgePacket._(Uint8List? buffer, {
         
         required super.ack,
         // required super.bid,
@@ -91,7 +94,7 @@ final class BridgePacket extends MessagePacket {
         
         // required super.headerLength,
         // required super.payloadLength,
-
+        
         required super.target,
         required super.source,
         
@@ -101,14 +104,15 @@ final class BridgePacket extends MessagePacket {
         
         required super.command,
         
-        required super.payload
-    }) : super(
+        required super.payload,
+    }) : super(buffer,
+        
         /// 桥接包 B=1
         bid: 1,
             
         /// 计算 headerLength 和 payloadLength
         headerLength: calcHeaderLength(bid: 1, cmd: cmd, dsn: dsn, ext: ext),
-        payloadLength: calcPayloadLength(payload),
+        payloadLength: payload.length,
     );
     
     factory BridgePacket(Uint8List? buffer, {
@@ -131,7 +135,7 @@ final class BridgePacket extends MessagePacket {
          
         required int command,
         
-        Uint8List? payload
+        required Payload payload,
     }) => BridgePacket._(buffer,
         
         ack: ack,
@@ -152,7 +156,7 @@ final class BridgePacket extends MessagePacket {
         
         command: command,
         
-        payload: payload
+        payload: payload,
     );
     
     //
@@ -179,7 +183,7 @@ final class BridgePacket extends MessagePacket {
          
         required int command,
         
-        Uint8List? payload
+        required Payload payload,
     }) => BridgePacket._(null,
         
         ack: ack,
@@ -200,19 +204,19 @@ final class BridgePacket extends MessagePacket {
         
         command: command,
         
-        payload: payload
+        payload: payload,
     );
     
     /// 第一次握手
     /// [source] 为预订 bid（可选）：0 表示普通申请（由服务器分配），
     /// 非 0 表示客户端希望预订该 bid（新建预订须 > 65535，若是 loopback 重握手复用之前的内定 bid，可传 = port ≤ 65535 的原值）。
-    factory BridgePacket.syn(Uint8List? info, {
+    factory BridgePacket.syn(Payload? request, {
         int source = 0
     }) => BridgePacket.create(
         ack: 0,
         
-        target: 0,  // 这个包是发给服务器的指令，所以这里 target = 0
-        source: source,  // 0 = 普通申请；非 0 = 预订 bid
+        target: 0,       // 发给服务器
+        source: source,
         
         sn:    0,
         index: 0,
@@ -220,19 +224,19 @@ final class BridgePacket extends MessagePacket {
         
         command: Command.SYN,
         
-        payload: info
+        payload: request,
     );
     
     /// 第二次握手
-    /// info 为载荷数据区（含 UDP、token、token_time，由服务器逻辑构造；
+    /// response 为载荷数据区（含 UDP、token、token_time，由服务器逻辑构造；
     /// 文本头 mp-secret 携带握手密钥，由调用方加入）
-    factory BridgePacket.synAck(Uint8List? info, {
+    factory BridgePacket.synAck(Payload? response, {
         required int target,  // 服务器为该客户端分配的 bid
     }) => BridgePacket.create(
         ack: 1,
         
         target: target,
-        source: 0,  // 这个包是服务器发给客户端的，所以这里 source = 0
+        source: 0,       // 来自服务器
         
         sn:    0,
         index: 0,
@@ -240,18 +244,18 @@ final class BridgePacket extends MessagePacket {
         
         command: Command.SYN_ACK,
         
-        payload: info
+        payload: response,
     );
     
     /// 第三次握手
-    /// info 原样回传第二次握手包中的 token/token_time（数据区 time 取
+    /// response 原样回传第二次握手包中的 token/token_time（数据区 time 取
     /// 客户端当前时间；文本头 mp-secret 携带握手密钥，由调用方加入）
-    factory BridgePacket.ack(Uint8List? info, {
+    factory BridgePacket.ack(Payload? response, {
         required int source,  // 从第二次握手包中得到的 target
     }) => BridgePacket.create(
         ack: 1,
         
-        target: 0,  // 这个包是发给服务器的指令，所以这里 target = 0
+        target: 0,       // 发给服务器
         source: source,
         
         sn:    0,
@@ -260,14 +264,14 @@ final class BridgePacket extends MessagePacket {
         
         command: Command.ACK,
         
-        payload: info
+        payload: response,
     );
     
     /// 失败
-    /// 1. bid 分配失败：target = 期望的（预订）bid，info 仅含 time；
-    /// 2. 第三次握手包缺失：target = 已分配的 bid，info 为 socket 信息（同 "SYN!"，含 time）；
-    /// 3. 无法修改通行证： target = 已分配的 bid，info 为失败的 bid 列表（含 time）。
-    factory BridgePacket.fail(Uint8List? info, {
+    /// 1. bid 分配失败：target = 期望的（预订）bid；response 仅含 time；
+    /// 2. "ACK!"包缺失：target = 期望或已分配的 bid；response 为 socket 信息（含 time，不含 Content-Type 和 Content-Length）；
+    /// 3. 无法修改通行证：target = 已分配的 bid；response 为失败的 bid 列表（含 time）。
+    factory BridgePacket.fail(Payload? response, {
         required int target,  // 客户端 bid（期望或已分配）
         int sn = 0,
         int index = 0,
@@ -276,7 +280,7 @@ final class BridgePacket extends MessagePacket {
         ack: 1,
         
         target: target,
-        source: 0,  // 这个包是服务器发给客户端的，所以这里 source = 0
+        source: 0,       // 来自服务器
         
         sn:    sn,
         index: index,
@@ -284,11 +288,12 @@ final class BridgePacket extends MessagePacket {
         
         command: Command.FAIL,
         
-        payload: info
+        payload: response,
     );
     
     /// 成功完成
-    factory BridgePacket.done(Uint8List? info, {
+    /// 修改通行证：target = 已分配的 bid；response 为请求的 bid 列表（含 time）。
+    factory BridgePacket.done(Payload? response, {
         required int target,
         int sn = 0,
         int index = 0,
@@ -297,7 +302,7 @@ final class BridgePacket extends MessagePacket {
         ack: 1,
         
         target: target,
-        source: 0,  // 这个包是服务器发给客户端的，所以这里 source = 0
+        source: 0,       // 来自服务器
         
         sn:    sn,
         index: index,
@@ -305,16 +310,17 @@ final class BridgePacket extends MessagePacket {
         
         command: Command.DONE,
         
-        payload: info
+        payload: response,
     );
     
     /// 添加通行证
-    factory BridgePacket.acpt(Uint8List? info, {
+    /// 允许通行的 source bid 列表放在 request（含 time）
+    factory BridgePacket.acpt(Payload? request, {
         required int source,
     }) => BridgePacket.create(
         ack: 0,
         
-        target: 0,  // 这个包是发给服务器的指令，所以这里 target = 0
+        target: 0,       // 发给服务器
         source: source,
         
         sn:    0,
@@ -323,16 +329,17 @@ final class BridgePacket extends MessagePacket {
         
         command: Command.ACPT,
         
-        payload: info
+        payload: request,
     );
     
     /// 撤销通行证
-    factory BridgePacket.deny(Uint8List? info, {
+    /// 禁止通行的 source bid 列表放在 request（含 time）
+    factory BridgePacket.deny(Payload? request, {
         required int source,
     }) => BridgePacket.create(
         ack: 0,
         
-        target: 0,  // 这个包是发给服务器的指令，所以这里 target = 0
+        target: 0,       // 发给服务器
         source: source,
         
         sn:    0,
@@ -341,16 +348,16 @@ final class BridgePacket extends MessagePacket {
         
         command: Command.DENY,
         
-        payload: info
+        payload: request,
     );
     
     /// 心跳
-    factory BridgePacket.ping(Uint8List? info, {
+    factory BridgePacket.ping(Payload? request, {
         required int source,
     }) => BridgePacket.create(
         ack: 0,
         
-        target: 0,  // 这个包是发给服务器的指令，所以这里 target = 0
+        target: 0,       // 发给服务器
         source: source,
         
         sn:    0,
@@ -359,33 +366,35 @@ final class BridgePacket extends MessagePacket {
         
         command: Command.PING,
         
-        payload: info
+        payload: request,
     );
     
     /// 心跳应答
-    /// （packet 为收到的 ping 包；info 为应答数据区，遵循载荷文档格式（含 time 与 mp-verify），由调用方构造）
-    factory BridgePacket.pong(Magpie packet, [Uint8List? info]) => BridgePacket.create(
+    /// （packet 为收到的 ping 包；response 为应答信息，遵循载荷文档格式（含 time 与 mp-verify），由调用方构造）
+    factory BridgePacket.pong(Magpie packet, [Payload? response]) => BridgePacket.create(
         ack: 1,
         
+        /// bid 对调，原路返回
         target: packet.source,
         source: packet.target,  // 0
         
+        // 原样保留
         sn:    packet.sn,       // 0
         index: packet.index,    // 0
         count: packet.count,    // 1
         
         command: Command.PONG,
         
-        payload: info
+        payload: response,
     );
     
     /// 第一次挥手
-    factory BridgePacket.fin(Uint8List? info, {
+    factory BridgePacket.fin(Payload? request, {
         required int source,
     }) => BridgePacket.create(
         ack: 0,
         
-        target: 0,  // 这个包是发给服务器的指令，所以这里 target = 0
+        target: 0,       // 发给服务器
         source: source,
         
         sn:    0,
@@ -394,34 +403,36 @@ final class BridgePacket extends MessagePacket {
         
         command: Command.FIN,
         
-        payload: info
+        payload: request,
     );
     
     /// 第二次挥手
-    /// （packet 为收到的 fin 包；info 为应答数据区，遵循载荷文档格式（含 time 与 mp-verify），由调用方构造）
-    factory BridgePacket.finAck(Magpie packet, [Uint8List? info]) => BridgePacket.create(
+    /// （packet 为收到的 fin 包；response 为应答信息，遵循载荷文档格式（含 time 与 mp-verify），由调用方构造）
+    factory BridgePacket.finAck(Magpie packet, [Payload? response]) => BridgePacket.create(
         ack: 1,
         
+        /// bid 对调，原路返回
         target: packet.source,
         source: packet.target,  // 0
         
+        // 原样保留
         sn:    packet.sn,       // 0
         index: packet.index,    // 0
         count: packet.count,    // 1
         
         command: Command.FIN_ACK,
         
-        payload: info
+        payload: response,
     );
     
     /// 无操作（保活/自愈）
-    /// 用于意外收到 "FIN!" 时立即回复，以秒级恢复在线状态，无需应答
-    factory BridgePacket.noop(Uint8List? info, {
+    /// 用于意外收到 "FIN!" 时立即回复，以秒级恢复在线状态，无需应答（含 time）
+    factory BridgePacket.noop(Payload? request, {
         required int source,
     }) => BridgePacket.create(
         ack: 0,
         
-        target: 0,  // 这个包是发给服务器的指令，所以这里 target = 0
+        target: 0,       // 发给服务器
         source: source,
         
         sn:    0,
@@ -430,7 +441,7 @@ final class BridgePacket extends MessagePacket {
         
         command: Command.NOOP,
         
-        payload: info
+        payload: request,
     );
     
     /// 普通数据包，通过服务器转发给接收方
@@ -452,15 +463,15 @@ final class BridgePacket extends MessagePacket {
         
         command: 0,  // 为了尽可能控制数据包体积，这里使用空 command 打包
         
-        payload: data
+        payload: data,
     );
     
     /// 数据应答包，通过服务器转发“确认收到”给原发送方
-    /// （packet 为收到的数据包；info 为附加信息，默认为空）
-    factory BridgePacket.copy(Magpie packet, [Uint8List? info]) => BridgePacket.create(
+    /// （packet 为收到的数据包；response 为附加信息，默认为空）
+    factory BridgePacket.copy(Magpie packet, [Payload? response]) => BridgePacket.create(
         ack: 1,
         
-        // bid 对调
+        // bid 对调，原路返回
         target: packet.source,
         source: packet.target,
         
@@ -471,7 +482,7 @@ final class BridgePacket extends MessagePacket {
         
         command: Command.COPY,  // “确认收到”
         
-        payload: info
+        payload: response,
     );
     
 }
@@ -483,7 +494,7 @@ final class BridgePacket extends MessagePacket {
 
 ```dart
 final class DirectPacket extends MessagePacket {
-    DirectPacket._(super.buffer, {
+    DirectPacket._(Uint8List? buffer, {
         
         required super.ack,
         // required super.bid,
@@ -493,7 +504,7 @@ final class DirectPacket extends MessagePacket {
         
         // required super.headerLength,
         // required super.payloadLength,
-
+        
         // required super.target,
         // required super.source,
         
@@ -504,13 +515,14 @@ final class DirectPacket extends MessagePacket {
         required super.command,
         
         required super.payload
-    }) : super(
+    }) : super(buffer,
+        
         /// 直连包 B=0, 无 bid
         bid: 0,
             
         /// 计算 headerLength 和 payloadLength
         headerLength: calcHeaderLength(bid: 0, cmd: cmd, dsn: dsn, ext: ext),
-        payloadLength: calcPayloadLength(payload),
+        payloadLength: payload.length,
         
         target: 0,
         source: 0,
@@ -536,8 +548,9 @@ final class DirectPacket extends MessagePacket {
          
         required int command,
         
-        Uint8List? payload
+        required Payload payload,
     }) => DirectPacket._(buffer,
+        
         ack: ack,
         // bid: 0,
         cmd: calcCmd(command),
@@ -556,13 +569,61 @@ final class DirectPacket extends MessagePacket {
         
         command: command,
         
-        payload: payload
+        payload: payload,
     );
     
     //
-    //  TODO: 各种指令工厂（跟 BridgePacket 类似，除了没有 target 和 source 参数）
-    //        包括：syn(), synAck(), ack(), fail(), done(), ping(), pong(), fin(), finAck(), noop(), data(), copy()
-    //        不包括 acpt(), deny()（锁死 B=1，仅服务器场景）
+    //  Factory methods
+    //
+    
+    factory DirectPacket.create({
+        
+        required int ack,
+        // required int bid,
+        // required int cmd,
+        // required int dsn,
+        // required int ext,
+         
+        // required int headerLength,
+        // required int payloadLength,
+         
+        // required int target,
+        // required int source,
+         
+        required int sn,
+        required int index,
+        required int count,
+         
+        required int command,
+        
+        required Payload payload,
+    }) => DirectPacket._(null,
+        
+        ack: ack,
+        // bid: 1,
+        cmd: calcCmd(command),
+        dsn: calcDsn(sn),
+        ext: calcExt(count),
+        
+        // headerLength: ...,
+        // payloadLength: ...,
+        
+        // target: 0,
+        // source: 0,
+        
+        sn:    sn,
+        index: index,
+        count: count,
+        
+        command: command,
+        
+        payload: payload,
+    );
+    
+    //
+    //  TODO: 其他指令工厂跟 BridgePacket 类似，除了没有 target 和 source 参数
+    //        包括：syn(), synAck(), ack(), ping(), pong(), fin(), finAck(), noop(), data(), copy()
+    //        不包括：acpt(), deny(), fail(), done()
     //
     
 }
@@ -578,26 +639,22 @@ static int calcType({
     required int dsn,
     required int ext,
 }) => (ack << 7) | (bid << 6) | (cmd << 5) | (dsn << 4) | (ext & 0x07);
-    
+
 static int calcHeaderLength({
     required int bid,
     required int cmd,
     required int dsn,
     required int ext,
 }) => 8 + 8*bid + 4*dsn + 2*ext + 4*cmd;
-    
-static int calcPayloadLength(
-    Uint8List? payload
-) => payload?.length ?? 0;
-    
+
 static int calcCmd({
     required int command
 }) => command == 0 ? 0 : 1;
-    
+
 static int calcDsn({
     required int sn
-}) => sn == 0 ? 0 : 1;  // sn == 0 表示无 dsn（系统指令），数据包 sn 从 1 开始自增
-    
+}) => sn == 0 ? 0 : 1;  // sn == 0 表示无 dsn（系统指令）
+
 static int calcExt({
     required int count
 }) {
@@ -633,10 +690,11 @@ final class MessageParser implements MagpieParser {
 	    }
 	    // 1. 前 8 个字节的有效性检查
 	    //    检查 Magic Code；
-	    //    读出 flags（bid = (type >> 6) & 0x01），检查 E 合法性：E = type & 0x07（低 3 位，bit 3 不检查）；
+	    //    读出 flags（其中 bid = (type >> 6) & 0x01）；
+	    //    检查 E 合法性：E = type & 0x07（低 3 位，bit 3 不检查）；
 	    //    E 只允许 0~4，取值 5/6/7 判定为错误包；
 	    //    检查约束：E>0 时 D 必须为 1（D=0 且 E>0 判定为错误包）；
-	    //    读出 headerLength 和 payloadLength，然后与 flags 一起计算检查头长度合法性；
+	    //    读出 headerLength 和 payloadLength，与 flags 一起计算检查头长度合法性；
 	    
 	    // 2. 头参数的有效性检查
 	    //    根据 flags 指示依次读出 target, source, sn, index, count, command 等参数；
