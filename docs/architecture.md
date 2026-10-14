@@ -1,173 +1,175 @@
-# Magpie Bridge Architecture 架构设计
+# 架构设计
 
-Magpie 采用 **N:1 的 C-S 结构**：S 为离散型转发节点（"桥"），一个服务器可以十分高效地为众多客户端提供转发服务，但仅限于已在本服务器上注册的客户端。
+N:1 的客户端-服务器拓扑。服务器是离散的中继节点，可为大量已注册客户端高效提供转发服务，与其他服务器互不关联。客户端按延迟自行选择服务器。服务器只提供最基础的转发能力。
 
-服务器只为客户端提供最简单的转发服务，不与其他服务器关联；转发服务器彼此独立，客户端根据连通速度自行选择转发服务器。
+- [线程模型](#线程模型)
+- [bid record](#bid-record)
+- [握手 Token](#握手-token)
+- [管理线程子流程](#管理线程子流程)
+- [转发线程主循环](#转发线程主循环)
+- [流量控制](#流量控制)
 
-## 网络结构
+
+## 线程模型
+
+接收与转发分离，各自由独立线程处理。服务器在内存中维护一张 bid record 分配表，并建立两套索引——按 bid、按 socket 字符串 `"{ip}:{port}"`。任何时刻一个 bid 只对应一个 socket，反之亦然。
+
+```mermaid
+flowchart TB
+    U["UDP 端口 :9527"]
+    subgraph SVR["服务器内部"]
+        R["接收线程<br/>绑定单一 UDP 端口<br/>封装任务入队"]
+        WQ["等待队列"]
+        P["预处理线程<br/>丢弃广播/多播<br/>校验协议头<br/>仅处理 B=1"]
+        MQ["管理队列"]
+        M["管理线程<br/>SYN? / ACK! / PING / FIN?<br/>ACPT / DENY / NOOP<br/>空闲时执行 purge 回收"]
+        FW["转发线程（W=8）<br/>按 source bid 哈希分配<br/>每线程内按 bid 轮询"]
+        R --> WQ --> P
+        P -->|"target=0"| MQ --> M
+        P -->|"target/source 均非 0"| FW
+    end
+    U <--> R
+    FW --> U
+    M --> U
+```
+
+1. **接收线程**：绑定一个 UDP 端口，把 `(数据包, socket)` 直接塞进等待队列。单端口不随用户数增加 fd 占用。
+2. **预处理线程**：
+   - 来源为广播/多播地址 → 静默丢弃（防放大攻击）；
+   - 校验协议头，失败丢弃；
+   - 仅处理 B=1 的桥接包；
+   - target=0 → 交给管理队列；
+   - source=0 或 source==target → 上行违规丢弃；
+   - 其余情况按 `n = source_bid % W` 哈希指派给第 n 条转发线程。
+3. **管理线程**：负责 bid 分配、记录回收、通行证管理与系统指令应答。
+4. **转发线程（W=8）**：负责数据转发。
+
+
+## bid record
+
+| 字段 | 含义 | 是否可变 |
+|------|------|---------|
+| `bid` | 门牌号 | 不变量 |
+| `key` | socket 字符串 `"{ip}:{port}"` | 不变量 |
+| `socket` | ip、port | 不变量 |
+| `secret` | 客户端密钥 | 创建后不变 |
+| `last_time` | 最后活跃时间 | 每个有效包更新 |
+| `offline` | 主动下线标志（FIN? 设置） | 由 NOOP / 重新握手清除 |
+| `allowlist` | 通行证列表，元素为 `(bid, key)` | 由 ACPT/DENY 维护 |
+
+只有管理线程和转发线程更新 `last_time`；预处理线程不查表、不更新。
+
+
+## 握手 Token
+
+握手是**无状态**的：`SYN?` 阶段不创建任何记录。服务器用 HMAC-SHA256 生成 token"锁死"握手参数，客户端在 `ACK!` 中回传，服务器不依赖会话状态即可校验。
+
+两种密钥，均须密码学安全随机数：
+
+- **服务器密钥**：仅用于签发/校验握手 token，存于内存，定期轮换，永不外发。
+- **客户端密钥**：服务器生成，经 `SYN!` 下发，客户端保存；此后所有签名包都用它。在 record 生命周期内固定不变。
+
+### Token 生成规则
+
+```
+bid    = 已分配 bid（整数）
+secret = record.secret（复用）或新随机值，Base64
+socket = 观察到的 "{ip}:{port}"
+time   = 服务器时间戳（秒）
+msg    = 按 key 字典序拼接 "bid={bid}&secret={secret}&socket={socket}&time={time}"
+token  = Base64( HMAC-SHA256(server_secret, msg) )
+```
+
+### Token 校验规则
+
+```
+bid    = 协议头 source bid
+socket = 观察到的来源 "{ip}:{port}"
+secret = 载荷中的 "secret"
+time   = 载荷中的 "token_time"
+用服务器密钥组（最多 2 个）逐个重算 HMAC，任一匹配即通过；全部不匹配则拒绝。
+```
+
+
+## 管理线程子流程
+
+主循环先排空管理队列；空闲时按不短于 `record_recycle_interval`（默认 10 分钟）调用 `purge(now)`，回收超过 `expires` 的记录。
+
+通用门禁：除 `SYN?` 外，所有任务要求 `source > 0`。之后：
+
+- 按来源 socket 查记录，不存在 → 回 `FAIL`（受应答频率限制，见 [security.md](security.md)）并丢弃；
+- 记录存在但 `record.bid != source` → 伪造来源，丢弃；
+- 更新 `last_time`；
+- 过滤未知 command；
+- 按 command 分发。
+
+### 2.1 SYN?（第一次握手，不创建记录）
 
 ```mermaid
 flowchart TD
-    subgraph 客户端
-        A[客户端 A]
-        B[客户端 B]
-        C[客户端 C]
-    end
-
-    subgraph 服务器 S
-        R[接收线程<br/>绑定 UDP 端口]
-        P[预处理线程<br/>校验 / 分流]
-        M[管理线程<br/>bid 分配 / 回收 / 通行证 / 系统指令]
-        F[转发线程 × W<br/>按 bid 转发]
-        Y[("yellow_pages<br/>bid ↔ socket")]
-    end
-
-    A -->|"UDP 桥接包 B=1"| R
-    B -->|"UDP 桥接包 B=1"| R
-    C -->|"UDP 桥接包 B=1"| R
-    R --> P
-    P -->|"target = 0<br/>系统指令"| M
-    P -->|"target ≠ 0<br/>转发请求"| F
-    M -->|"分配/回收/查询"| Y
-    F -->|"查询/校验"| Y
-    M -->|"SYN! / PONG / FIN! / DONE / FAIL"| A
-    F -->|"转发数据包"| B
-    B -->|"COPY 应答"| F
-    F -->|"转发应答"| A
-
-    A <-->|"直连 B=0<br/>不经过服务器"| B
+    Q["收到 SYN?"] --> R{"此 socket 是否已有记录"}
+    R -->|"是"| Reuse["复用 bid 与 record.secret"]
+    R -->|"否"| P{"source bid 是否非 0"}
+    P -->|"是"| Reserve{"bid > 65535 且空闲"}
+    Reserve -->|"否"| F1["FAIL"]
+    Reserve -->|"是"| Use["采用请求的 bid"]
+    P -->|"否"| L{"来源是否为 loopback"}
+    L -->|"是"| Inner["内定 bid = 本地端口"]
+    L -->|"否"| Rand["随机 bid 0x10000 到 0x7FFFFFFF"]
+    Reuse --> T["生成 secret 与 token"]
+    Use --> T
+    Inner --> T
+    Rand -->|"M 次冲突仍失败"| F2["FAIL"]
+    T --> Reply["回复 SYN!，target=bid"]
 ```
 
-> 客户端与客户端之间优先直连（B=0，无 bid 字段）；无法直连时经服务器转发（B=1）。
+本阶段不登记 socket、不保存 secret、不创建记录，转发线程因查不到记录仍不转发。
 
-## 服务器设计
+### 2.2 ACK!（第三次握手，创建记录）
 
-服务器内部逻辑被设计为**收发分离**，即接收和转发各由单独的线程处理。
+- 用服务器密钥组校验 token；不匹配 → 静默丢弃。
+- 检查 `token_time` 在 `handshake_token_timeout`（默认 60 秒）内，超时 → `FAIL`。
+- 按 source bid 查表：
+  - 不存在 → **创建 bid record**（secret 取自载荷，last_time=now）；
+  - 存在且 socket 匹配 → 幂等刷新 `last_time`、清除 offline，secret 保持不变；
+  - 存在但 socket 不同 → bid 竞态，回 `FAIL`，客户端重新握手。
 
-服务器在内存中维护一张 bid -> socket 信息映射表 **yellow_pages**。
+### 其他指令
 
-```mermaid
-flowchart LR
-    subgraph 服务器内部数据流
-        U{{UDP 端口}}
-        R[接收线程]
-        P[预处理线程]
-        M[管理线程]
-        F[转发线程 × W]
-        Q1[(等待处理队列<br/>waiting_queue)]
-        Q2[(管理请求队列<br/>manager_queue)]
-        Q3[(转发队列<br/>forwarder_queue × W)]
+| 命令 | 处理 |
+|------|------|
+| `PING` | 回复 `PONG` |
+| `FIN?` | 标记记录 offline，回 `FIN!`（不删记录） |
+| `ACPT` / `DENY` | 校验 bid 列表；全部有效 → 改 allowlist 回 `DONE`；任一无效 → 原子回滚回 `FAIL` |
+| `NOOP` | 清除 offline，**不应答**（自愈） |
 
-        U -->|"读取数据包"| R
-        R -->|"不做判断直接放入"| Q1
-        Q1 -->|"取出数据包"| P
-        P -->|"target = 0"| Q2
-        P -->|"target ≠ 0"| Q3
-        Q2 -->|"取出请求"| M
-        Q3 -->|"取出任务"| F
-        M -->|"应答 SYN!/PONG/FIN!/DONE/FAIL"| U
-        F -->|"原样转发"| U
-    end
-```
 
-> 形状约定：六边形 = 外部端点（UDP 端口）；矩形 = 处理单元（线程）；圆柱 = 缓冲存储（队列）。
+## 转发线程主循环
 
-### 0. 接收线程
-
-服务器启动时绑定一个 UDP 端口，接收线程从该端口接收数据包之后，不做任何判断，直接将数据包与 socket 信息一起塞进预处理线程的等待列表中。
-
-由于 UDP 只绑定一个端口，所以不会随着用户数增加而增加 fd 占用开销。
-
-### 1. 预处理线程
-
-从等待列表中取出数据包，处理流程如下：
+每条转发线程为每个 source bid 维护一个等待队列，按**广度优先**轮询（每轮每个 bid 取一个），避免单个用户抢占。
 
 ```mermaid
 flowchart TD
-    IN[取出数据包] --> D1{来源 IP 为<br/>广播/多播地址?}
-    D1 -- 是 --> DR[丢弃<br/>不应答、不转发]
-    D1 -- 否 --> D2{协议头校验<br/>通过?}
-    D2 -- 否 --> DR
-    D2 -- 是 --> D3{标志位 B=1?<br/>只处理桥接包}
-    D3 -- 否 --> DR
-    D3 -- 是 --> D4{target bid = 0?}
-    D4 -- 是 --> M[交给管理线程<br/>继续检查 source/command]
-    D4 -- 否 --> D5{source bid = 0?<br/>上行校验违规}
-    D5 -- 是 --> DR
-    D5 -- 否 --> D6{socket 与记录<br/>匹配?}
-    D6 -- 否 --> DR
-    D6 -- 是 --> UP[更新活跃时间<br/>last_time] --> F[指派转发线程]
+    G["取出下一个任务"] --> S1{"来源 socket 是否有记录"}
+    S1 -->|"无"| U1["限频后回 FAIL 并丢弃"]
+    S1 -->|"有"| S2{"record.bid 是否等于 source"}
+    S2 -->|"否"| Drop1["作为伪造来源丢弃"]
+    S2 -->|"是"| Upd["更新发送方活跃时间"]
+    Upd --> V1["HMAC-SHA256 校验通过?"]
+    V1 -->|"否"| Drop2["静默丢弃"]
+    V1 -->|"是"| D1{"target 记录是否存在"}
+    D1 -->|"否"| Silent["静默丢弃"]
+    D1 -->|"是"| A1{"source 是否在 target 通行证列表"}
+    A1 -->|"否"| Silent2["静默丢弃"]
+    A1 -->|"是"| O1{"target 是否离线或超时"}
+    O1 -->|"是"| U2["限频后回 FAIL"]
+    O1 -->|"否"| Sig["用 target.secret 重新签名"]
+    Sig --> Fwd["原样转发到 target socket"]
 ```
 
-**校验清单**：
 
-- 来源 IP 为广播或多播地址（IPv4 224.0.0.0/4 与 255.255.255.255、IPv6 ff00::/8 等）直接丢弃，不应答、不转发；正常数据包的来源地址不可能是广播/多播地址，此类来源多为伪造，若不丢弃，服务器向其应答/转发会使数据扩散到整个广播域或多播组，形成放大攻击；
-- Magic Code；
-- Type、header length、payload length，以及相互关系；
-- 将实际数据包的长度与根据上面各字段计算得到的值进行比较；
-- C=1 时 command 必须非 0（全 0 判定为错误包）；除此之外不校验 command 的具体取值，一律放行（具体值是否为系统指令、如何应答，由管理线程按场景处理，客户端自定义 command 亦不受限）；
-- B=1 时 target bid 与 source bid 非 0 时不能相等（服务器转发包不能发往同一个客户端；同时为 0 是第一次握手包，例外），判定后直接丢弃。
+## 流量控制
 
-> 备注：source bid 为 0 时 target bid 也必定为 0，这种情况只会在"第一次握手包"中存在；反之（source bid = 0 且 target bid ≠ 0）则属于上行校验违规，直接丢弃（见上方流程图步骤）。
+转发线程采用**滑动窗口**：每条线程在 `forward_window` 秒内最多处理 `forward_limit_per_window` 个任务，达上限后本轮窗口不再取新任务；队列超出 `forwarder_queue_size` 的新包直接丢弃并记日志（由客户端可靠传输重发）。
 
-### 2. 管理线程
-
-从管理请求队列中取出数据包，然后判断是哪种类型的请求；若无法识别为下列任一类型（未知 command），直接丢弃退出。
-如果管理请求队列为空（管理线程空闲），则调用 purge(now) 回收超时的 bid 记录（详见 server 文档）。
-
-管理线程处理流程：
-
-```mermaid
-flowchart LR
-    IN[从管理队列取出数据包] --> EMPTY{队列为空?}
-    EMPTY -- 是 --> PURGE[purge 回收超时的 bid 记录<br/>随后继续取包]
-    PURGE --> IN
-    EMPTY -- 否 --> CMD{command 是?}
-    CMD -->|"SYN?"| H1[第一次握手<br/>按 socket 查表复用 / 预订 / 内定 / 新分配<br/>回复 SYN! 或 FAIL]
-    CMD -->|"ACK!"| H3[第三次握手<br/>校验 socket 匹配<br/>标记连接已建立 acknowledged]
-    CMD -->|"PING"| HB[心跳<br/>回复 PONG<br/>更新活跃时间]
-    CMD -->|"FIN?"| FW[挥手<br/>回复 FIN!<br/>删除记录释放 bid]
-    CMD -->|ACPT/DENY| PS[通行证管理<br/>校验 bid 列表有效性<br/>整体加入/移出通行证列表<br/>回复 DONE 或 FAIL]
-    CMD -->|"其他"| DR[未知 command 丢弃]
-    H1 --> IN
-    H3 --> IN
-    HB --> IN
-    FW --> IN
-    PS --> IN
-    DR --> IN
-```
-
-> 管理线程按 socket 配对应答：从哪个 socket 收到请求，就回哪个 socket；source bid 仅用于身份校验（验证 bid 与 socket 的绑定关系），不参与应答寻址。
-
-### 3. 转发线程（W 条）
-
-服务器启动时自动安排 W 条转发线程处理任务（默认 W=8），预处理线程在分配转发任务时先计算 `n = (source bid) % W`，然后指派给第 n 条转发线程。
-
-转发线程内部为每个 source bid 创建一个等待转发队列，指派任务时直接将数据包放进相应的队列中。
-
-#### 转发线程 runloop
-
-为了公平起见，避免单个用户发送大量数据严重干扰其他用户的正常请求，轮训任务时采用"广度优先"策略：
-
-```mermaid
-flowchart TD
-    IN[轮询辖下 source bid] --> Q{等待转发队列<br/>非空?}
-    Q -- 否 --> SL[所有 bid 均无任务<br/>sleep 片刻]
-    SL --> IN
-    Q -- 是 --> S1{source bid 记录存在<br/>socket 匹配且已 ACK!?}
-    S1 -- 否 --> FAIL1[以 FAIL 通知客户端<br/>丢弃该包]
-    FAIL1 --> IN
-    S1 -- 是 --> S2{target bid 记录存在<br/>且活跃?}
-    S2 -- 否 --> DR[丢弃]
-    DR --> IN
-    S2 -- 是 --> S3{"(source bid, 当前 socket)<br/>在 target 通行证列表中?"}
-    S3 -- 否 --> DR
-    S3 -- 是 --> FWD[发送给 target bid<br/>对应的 socket] --> IN
-```
-
-#### 流量控制
-
-为了避免流量风暴，转发线程需要增加一个限流措施（设定一个在规定时间内最多处理多少任务的上限值）。
-由于系统将转发任务拆分给 W=8 条线程处理，所以单条线程的任务达到上限不会影响其他线程，将风暴控制在一个很小的影响范围之内。
-
-采用**滑动窗口**方式限流：达到窗口上限后本轮窗口内不再取新任务，等待下一个窗口再继续；超过队列容量的新包直接丢弃并记录日志（由客户端可靠传输机制重试）。具体窗口时长、每窗口处理上限与队列容量等参数及默认值见 server 文档。
+默认值：8 条线程 × 4096 包 / 0.1 秒 ≈ **327,680 包/秒**；单线程队列容量 65536（最坏约 64 MiB，约 1.6 秒突发缓冲）。
