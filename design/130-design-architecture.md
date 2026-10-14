@@ -32,7 +32,7 @@ Record 属性：
 
 注：
 
-1. 其中 bid、key、socket 和 secret 均为**不变量**，记录一经创建永不改变；
+1. 其中 bid、key、socket 和 secret 均为**不变量**，记录一经创建永不改变（socket 与记录绑定后不可迁移至其他 socket，来源 socket 不匹配一律按冲突/伪造处理）；
 2. 每次收到有效数据包时都需要更新 last_time；
 3. 离线标志 offline 为客户端主动发送 "FIN?" 的标志；仅由 "ACK!" 幂等分支（重新握手走完第三次握手）或 "NOOP" 清除；"PING" 及数据包转发只更新 last_time，不改变 offline 标志；
 4. 通行证列表 allowlist 的元素是 (bid, key) 二元组，由 ACPT/DENY 指令维护。
@@ -59,11 +59,10 @@ Record 属性：
 
 ### 2. 管理线程
 
-管理线程的每一个 runloop，先检查管理请求队列是否有新任务等待处理，
-如果队列为空（管理线程空闲），则执行回收职责：
-> 按不短于 `record_recycle_interval`（默认 10 分钟）的间隔调用 purge(now) 回收超过 expires 的常规记录（详见服务器文档）。
+管理线程的每一个 runloop，先执行一次回收检查：
+> 若距上次调用已超过 `record_recycle_interval`（默认 10 分钟），调用 purge(now) 回收超过 expires 的常规记录（详见服务器文档）。
 
-否则从管理请求队列中取出下一个任务，
+然后从管理请求队列中取出下一个任务（队列为空时阻塞等待），
 
 - 如果 command == "SYN?"，走“第一次握手”子流程（唯一允许 source bid 为 0 的情况），完成后进入下一个循环；
 - 除此以外必须 source > 0，否则属于上行校验违规，直接丢弃然后进入下一个循环；
