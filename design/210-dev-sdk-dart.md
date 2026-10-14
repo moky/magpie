@@ -268,10 +268,11 @@ class BridgePacket extends MessagePacket {
         payload: response,
     );
     
-    /// 失败
-    /// 1. bid 分配失败：target = 期望的（预订）bid；response 仅含 time；
-    /// 2. "ACK!"包缺失：target = 期望或已分配的 bid；response 为 socket 信息（含 time，不含 Content-Type 和 Content-Length）；
-    /// 3. 无法修改通行证：target = 已分配的 bid；response 为失败的 bid 列表（含 time）。
+    /// 失败（response 载荷格式见载荷文档，按场景区分）：
+    /// 1. bid 分配失败：target = 期望的（预订）bid；response 仅含 {"time":...}；
+    /// 2. 连接未确认（ACK! 缺失）：target = 已分配的 bid；response 含 {"src-command":"<被拒 command 的十六进制>","time":...}；
+    /// 3. target 离线：target = 已分配的 bid；response 含 {"src-command":"...","src-target":<离线收件人 bid>,"time":...}；
+    /// 4. 无法修改通行证：target = 已分配的 bid；response 为 {"sources":[<失败 bid 列表>],"time":...}。
     factory BridgePacket.fail(Uint8List? response, {
         required int target,  // 客户端 bid（期望或已分配）
         int sn = 0,
@@ -699,7 +700,7 @@ final class MessageParser implements MagpieParser {
 	    
 	    // 2. 头参数的有效性检查
 	    //    根据 flags 指示依次读出 target, source, sn, index, count, command 等参数；
-	    //    检查各项参数是否越界；
+	    //    检查各项参数是否越界：E>0 时 count 必须 > 1，且 0 <= index < count，否则为错误包；
 	    //    若 C=1，则 command 必须非 0（全 0 判定为错误包）；不校验 command 的具体取值（是否系统指令由上层判断）；
 	    
 	    // 3. 读取 payload，然后创建消息包对象

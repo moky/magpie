@@ -42,7 +42,7 @@ sequenceDiagram
         S->>C: SYN! (target=x, source=0)
         Note over S: SYN_RCVD
         C->>C: 保存 secret / token / token_time
-        C->>S: ACK! (target=0, source=x，回传 secret/token)
+        C->>S: ACK! (target=0, source=x，回传 secret/token/token_time)
         S->>S: 校验 token，创建 bid record
         Note over C,S: ESTABLISHED
     else 分配失败

@@ -34,7 +34,7 @@ Record 属性：
 
 1. 其中 bid、key、socket 和 secret 均为**不变量**，记录一经创建永不改变；
 2. 每次收到有效数据包时都需要更新 last_time；
-3. 离线标志 offline 为客户端主动发送 "FIN?" 的标志，可通过回复 "NOOP" 或者重新握手消除；
+3. 离线标志 offline 为客户端主动发送 "FIN?" 的标志；仅由 "ACK!" 幂等分支（重新握手走完第三次握手）或 "NOOP" 清除；"PING" 及数据包转发只更新 last_time，不改变 offline 标志；
 4. 通行证列表 allowlist 的元素是 (bid, key) 二元组，由 ACPT/DENY 指令维护。
 
 ### 0. 接收线程

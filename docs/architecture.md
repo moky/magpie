@@ -54,7 +54,7 @@ flowchart TB
 | `socket` | ip、port | 不变量 |
 | `secret` | 客户端密钥 | 创建后不变 |
 | `last_time` | 最后活跃时间 | 每个有效包更新 |
-| `offline` | 主动下线标志（FIN? 设置） | 由 NOOP / 重新握手清除 |
+| `offline` | 主动下线标志（FIN? 设置） | 由 NOOP / ACK! 幂等分支清除（PING 不清） |
 | `allowlist` | 通行证列表，元素为 `(bid, key)` | 由 ACPT/DENY 维护 |
 
 只有管理线程和转发线程更新 `last_time`；预处理线程不查表、不更新。
@@ -75,7 +75,7 @@ flowchart TB
 bid    = 已分配 bid（整数）
 secret = record.secret（复用）或新随机值，Base64
 socket = 观察到的 "{ip}:{port}"
-time   = 服务器时间戳（秒）
+time   = 服务器时间戳（**整数秒**，参与 HMAC 计算）
 msg    = 按 key 字典序拼接 "bid={bid}&secret={secret}&socket={socket}&time={time}"
 token  = Base64( HMAC-SHA256(server_secret, msg) )
 ```
@@ -115,11 +115,12 @@ flowchart TD
     Reserve -->|"是"| Use["采用请求的 bid"]
     P -->|"否"| L{"来源是否为 loopback"}
     L -->|"是"| Inner["内定 bid = 本地端口"]
-    L -->|"否"| Rand["随机 bid 0x10000 到 0x7FFFFFFF"]
-    Reuse --> T["生成 secret 与 token"]
-    Use --> T
-    Inner --> T
-    Rand -->|"M 次冲突仍失败"| F2["FAIL"]
+    L -->|"否"| Rand["随机 bid 0x10000 ~ 0x7FFFFFFF<br/>冲突重试 M=16 次"]
+    Reuse --> T["生成 token"]
+    Use --> NewSec["生成新 secret"] --> T
+    Inner --> NewSec
+    Rand --> NewSec
+    Rand -->|"M 次均冲突"| F2["FAIL"]
     T --> Reply["回复 SYN!，target=bid"]
 ```
 
@@ -152,16 +153,15 @@ flowchart TD
 flowchart TD
     G["取出下一个任务"] --> S1{"来源 socket 是否有记录"}
     S1 -->|"无"| U1["限频后回 FAIL 并丢弃"]
-    S1 -->|"有"| S2{"record.bid 是否等于 source"}
-    S2 -->|"否"| Drop1["作为伪造来源丢弃"]
-    S2 -->|"是"| Upd["更新发送方活跃时间"]
-    Upd --> V1["HMAC-SHA256 校验通过?"]
-    V1 -->|"否"| Drop2["静默丢弃"]
-    V1 -->|"是"| D1{"target 记录是否存在"}
-    D1 -->|"否"| Silent["静默丢弃"]
-    D1 -->|"是"| A1{"source 是否在 target 通行证列表"}
-    A1 -->|"否"| Silent2["静默丢弃"]
-    A1 -->|"是"| O1{"target 是否离线或超时"}
+    S1 -->|"有"| S2{"record.bid == source<br/>且 HMAC-SHA256 校验通过?"}
+    S2 -->|"伪造来源"| Drop["静默丢弃"]
+    S2 -->|"校验失败"| Drop
+    S2 -->|"通过"| Upd["更新发送方活跃时间"]
+    Upd --> D1{"target 记录是否存在"}
+    D1 -->|"否"| Drop
+    D1 -->|"是"| A1{"source 在 target 通行证列表?"}
+    A1 -->|"否"| Drop
+    A1 -->|"是"| O1{"target 离线或超时?"}
     O1 -->|"是"| U2["限频后回 FAIL"]
     O1 -->|"否"| Sig["用 target.secret 重新签名"]
     Sig --> Fwd["原样转发到 target socket"]

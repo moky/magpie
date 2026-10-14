@@ -85,7 +85,7 @@ stateDiagram-v2
     无记录 --> 已建立: ACK! token 校验通过
     已建立 --> 已建立: 幂等重复 ACK! / PING / 数据
     已建立 --> 离线: FIN?
-    离线 --> 已建立: NOOP / PING
+    离线 --> 已建立: NOOP / ACK! 幂等
     已建立 --> [*]: purge 超过 expires
 ```
 
@@ -132,9 +132,9 @@ forward_limit_per_window = 4096
 forward_window = 0.1
 
 # record lifecycle
-record_expires = 86400.0          # 24 h
-record_recycle_interval = 600.0    # 10 min
-record_active_timeout = 60.0      # T_active
+record_expires = 86400.0         # 24 h
+record_recycle_interval = 600.0  # 10 min
+record_active_timeout = 60.0     # T_active
 
 # handshake anti-amplification
 handshake_min_payload = 512

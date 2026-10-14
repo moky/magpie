@@ -3,7 +3,7 @@
 核心协议只定义了消息包格式与传递方式，未规定上层安全措施。本扩展（Magpie Improvement Proposal）在服务器场景下增加 HMAC-SHA256 附加校验码与密钥化身份模型，防止转发消息被轻易伪造。
 
 - [附加校验码](#附加校验码)
-- [ReliablePacket](#reliablepacket)
+- [类层级升级](#类层级升级)
 - [密钥模型](#密钥模型)
 - [签名转发](#签名转发)
 - [应答频率限制](#应答频率限制)
@@ -18,11 +18,11 @@
 
 ```
 +-------------------------------+
-|   header (8 ~ 32 字节)        |
+|   header (8 ~ 32 字节)         |
 +-------------------------------+
-|   payload (0 ~ 1024 字节)     |
+|   payload (0 ~ 1024 字节)      |
 +-------------------------------+
-|   attachment (0 或 32 字节)   |  HMAC-SHA256(header + payload)
+|   attachment (0 或 32 字节)    |  HMAC-SHA256(header + payload)
 +-------------------------------+
 ```
 
@@ -40,23 +40,52 @@
 MSS 校验作用于整个 UDP 载荷：`header + payload + attachment <= 1232`。满包发送时 `32 + 1024 + 32 = 1088`，距 MSS 余量 144 字节，仍足以覆盖一层中等开销隧道。
 
 
-## ReliablePacket
+## 类层级升级
+
+扩展层在原有 `MessagePacket → BridgePacket / DirectPacket` 基础上，增加一个带校验码的子类：
+
+```
+MessagePacket (基类，新增 copy())
+  ├── DirectPacket   (直连包，无需签名)
+  └── BridgePacket   (桥接包，新增 sign(secret))
+        └── ReliablePacket  (带 attachment，新增 verify(secret))
+```
+
+**1. MessagePacket 新增 `copy()`**：复制当前包副本（不含 attachment），供签名/验签时重新打包用。
+
+```dart
+// 基类方法，所有包类型继承
+MessagePacket copy();
+```
+
+**2. BridgePacket 新增 `sign(secret)`**：用客户端密钥对基础包签名，返回 `ReliablePacket`。
+
+```dart
+class BridgePacket extends MessagePacket {
+  ReliablePacket sign(Uint8List secret) {
+    final data = copy().pack();                  // 剔除 attachment，打包基础包
+    final digest = hmacSha256(secret: secret, message: data);
+    return ReliablePacket(data, /* ...原字段... */ attachment: digest);
+  }
+}
+```
+
+**3. ReliablePacket 新增 `attachment` 字段和 `verify(secret)`**：验签，常量时间比较防计时攻击。
 
 ```dart
 class ReliablePacket extends BridgePacket {
-  final Uint8List? attachment;
+  final Uint8List? attachment;                   // 32 字节 HMAC-SHA256
 
   bool verify(Uint8List secret) {
     final digest = attachment;
     if (digest == null || digest.length != 32 || secret.isEmpty) return false;
     final computed = hmacSha256(secret: secret, message: copy().pack());
-    return constantTimeByteEq(digest, computed);   // 禁止直接用 ==
+    return constantTimeByteEq(digest, computed); // 禁止直接用 ==
   }
 }
 ```
 
-- `sign(secret)`：先剔除已有校验码，打包基础包，追加 `HMAC-SHA256(secret, data)`。
-- `verify`：重新打包（不含校验码）后以常量时间比较结果，防计时攻击。
+> `DirectPacket`（B=0）不需要签名——直连场景的数据合法性由客户端应用层负责。
 
 
 ## 密钥模型
@@ -127,7 +156,7 @@ final ok = packet is ReliablePacket && packet.verify(record.secret);
 管理线程回复 `FAIL` 前须同时满足：
 
 1. 包尾带有 32 字节附加校验码；
-2. command 属于 `PING` / `ACPT` / `DENY`（仅此三条系统指令需要错误提示）；
+2. command 属于 `PING` / `ACPT` / `DENY`（仅此三条系统指令需要错误提示；`FIN?` 不在此列——连接未建立时挥手无意义，直接静默丢弃）；
 3. 通过 `hash(socket) % U` 命中的共享计数器放行。
 
 转发线程回 `FAIL`（target 离线）要求满足第 1、3 条。
