@@ -39,15 +39,15 @@
 		- 检查校验 token 信息、查询 bid record 分配表等步骤见架构设计文档；
 		- 直到这一步结束，新的 bid record 才会被创建；
 	- **【服务阶段】**如果是其他系统指令（要求 source bid > 0）：source bid 为 0 属于上行校验违规，直接丢弃；
-		- 先做来源检查（见架构设计文档），连接未确认或 source bid 不匹配均直接丢弃；
+		- 先做来源检查（见架构设计文档）：连接未确认则先回复 "FAIL"（应答受共享计数器限频，见安全提案）再丢弃；source bid 不匹配则直接丢弃；
 		- 凡 bid record 已建立后收到的系统指令（"SYN?" 与 "ACK!" 除外：前者无记录、后者走无状态令牌验证），均须对**附加校验码**进行 HMAC-SHA256 校验（见安全提案），校验失败视为不可信来源直接丢弃、不应答；
 		- 以上校验全部通过之后，**更新活跃时间**```record.last_time = now```；
 		- 然后根据 command 值进行相应的处理和应答（详见架构文档）；
-		- 最后回复任何应答（DONE/FAIL/PONG/FIN!）之前均须先检查应答频率，超过 ```reply_rate_limit```（默认 10 次/秒）则静默丢弃、不再回复（见安全提案）；
+		- 已绑定客户端的应答不限频（见安全提案）；
 
 3. **转发线程**每条转发线程只负责 source bid 与本线程编号对应的转发任务。
 	- 正常情况下，必须先完成握手才能转发数据，所以拿到转发任务时要先检查发送者状态：
-		- 先做来源检查（见架构设计文档），连接未确认或 source bid 不匹配均直接丢弃；
+		- 先做来源检查（见架构设计文档）：连接未确认则先回复 "FAIL"（应答受共享计数器限频，见安全提案）再丢弃；source bid 不匹配则直接丢弃；
 		- 凡 bid record 已建立后收到的数据包，均须对**附加校验码**进行 HMAC-SHA256 校验（见安全提案），校验失败视为不可信来源直接丢弃、不应答；
 	- 来源校验通过之后，**更新活跃时间**```record.last_time = now```，然后检查目标状态（见架构设计文档）；
 	- 以上校验全部通过之后，用接收方的 record.secret 重新对数据包进行签名（见安全提案），然后再执行转发操作。
@@ -230,12 +230,11 @@ handshake_min_payload = 512
 # below, so forged unconfirmed packets can trigger at most
 # reply_rate_limit FAIL replies per second per bucket (default: 1024)
 unconfirmed_reply_buckets = 1024
-# reply rate limit: maximum reply packets (PONG/DONE/FIN!/FAIL
-# combined) sent per bid per second; caps reflection amplification
-# triggered by forged confirmed-source packets, even when the attacker
-# knows the victim's secret (e.g. by sniffing); when the limit is
-# exceeded the reply is silently dropped (packets per second, default:
-# 10; a normal client replies far less often, e.g. PONG once per 16 s)
+# reply rate limit: maximum FAIL replies sent per unconfirmed bucket
+# per second (see unconfirmed_reply_buckets above); caps reflection
+# amplification triggered by forged packets from sources with no bound
+# record; when the limit is exceeded the reply is silently dropped
+# (packets per second, default: 10)
 reply_rate_limit = 10
 # server secret rotation: a new server secret is generated and put at
 # the head of server_secrets when it has been longer than this since
