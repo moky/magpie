@@ -1,31 +1,56 @@
 # Magpie Bridge (Server)
 
-这里定义 Magpie Bridge 服务器。
+这里定义 Magpie Bridge 服务器的具体实现。
 
 ## 各模块（线程）设计
 
 正如 **Magpie Bridge Architecture** 里定义的那样：
 
 1. 服务器通过一个**接收线程**从绑定的 UDP 端口中读取数据包，然后直接放入等待处理队列；
-2. **预处理线程**从前面的等待处理队列取出数据包，进行简单的校验之后，根据 target bid 决定是转交给“管理线程”处理，还是转交给“转发线程”处理；
+2. **预处理线程**从前面的等待处理队列取出数据包，进行基础校验之后，根据 target bid 决定是转交给“管理线程”处理，还是转交给“转发线程”处理；
 3. 服务器有一个**管理线程**，专门负责 bid 的分配管理、超时记录回收（purge）、通行证管理（ACPT/DENY），以及几个系统命令的应答；
 4. 服务器有 W 个**转发线程**，专门负责转发数据。
 
 ### 注意事项
 
-1. **预处理线程**需要校验的内容包括：
-	- 来源 IP 为广播或多播地址（IPv4 224.0.0.0/4 与 255.255.255.255、IPv6 ff00::/8 等）的数据包直接丢弃，不应答、不转发；正常数据包的来源地址不可能是广播/多播地址，此类来源多为伪造，若不丢弃，服务器向其应答/转发会使数据扩散到整个广播域或多播组，形成放大攻击；
-	- Magic Code
-	- Type、header length、payload length，以及相互关系；
-	- 将实际数据包的长度与根据上面各字段计算得到的值进行比较；
-	- C=1 时 command 必须非 0（全 0 判定为错误包）；除此之外**不校验 command 的具体取值**，一律放行（具体值是否为系统指令、如何应答，由管理线程按场景处理，客户端自定义 command 亦不受限）；
-	- source bid = 0 且 target bid ≠ 0 属于服务端上行校验规则（客户端不得伪造服务器下发包），判定后直接丢弃；
-		- B=1 时 target bid 和 source bid 非 0 时不能相等，即服务器转发包不能发往同一个客户端（同时为 0 是第一次握手包，这个属于例外），判定后直接丢弃；
+1. **预处理线程**需要校验的内容包括来源 IP 和协议头信息：
+	- 来源 IP 为广播或多播地址（IPv4 224.0.0.0/4 与 255.255.255.255、IPv6 ff00::/8 等）：
+		- 处理方式：静默丢弃（不应答、不转发）；
+		- 正常数据包的来源地址不可能是广播/多播地址，此类来源多为伪造，若不丢弃，服务器向其应答/转发会使数据扩散到整个广播域或多播组，形成放大攻击；
+	- 检查协议头，判定是否为合法数据包：
+		- Magic Code 不匹配的，静默丢弃（不应答、不转发）；
+		- 将由```type```各标志位计算的协议头长度 N 与```header_length```字段比较，不相等则静默丢弃；
+		- 将头长度 N 与```payload_length```相加，得到的值与实际数据包长度比较，不相等则静默丢弃（附加校验码格式校验见安全提案）；
+		- 当 C=1 时 command 必须非 0，全 0 则判定为错误包，静默丢弃；
+			- 除此之外**不校验 command 的具体取值**，一律放行（具体值是否为系统指令、如何应答，由管理线程按场景处理，客户端自定义 command 亦不受限）；
+		- 当 D=0 时必须 E=0，否则判定为错误包，静默丢弃；
+		- 当 D=1 时 sn 必须非 0，全 0 则判定为错误包，静默丢弃；
+		- 当 E>0 时，count 必须 > 1，且 0 <= index < count，否则为错误包，静默丢弃；
+	- 上行校验违规检查：
+		- 发给服务器/求转发的包必须 B=1，否则静默丢弃（不应答、不转发）；
+		- 如果 target bid ≠ 0，但 source bid = 0 的，静默丢弃（客户端不得伪造来源为服务器的数据包）；
+		- 如果 target bid ≠ 0 且与 source bid 相等的，静默丢弃（不能自己发给自己）；
+
 2. **管理线程**需要检查 command 及 source bid：
-	- 如果 command 是 "SYN?"，则为第一次握手（唯一允许 source bid 无内存记录的场景）：先根据 socket 信息查表——记录存在（socket 匹配）则复用该 bid（重新握手，secret 取原 record.secret）；否则 source bid 非 0 时一律走预订流程（无论来源是否 loopback，先检查是否合法且未被占用，失败则回复 "FAIL" 指令包）；source bid 为 0 时，loopback 来源按内定规则分配 bid = port，其余来源分配新 bid（均不创建记录）；然后生成客户端密钥 secret（复用场景取原 record.secret，否则随机生成），以服务器密钥对其关键信息（bid、socket、secret、当前时间）计算 HMAC-SHA256 得到 token，随 "SYN!" 下发（载荷文本头 mp-secret 携带 secret，数据区携带 token 与 token_time，Base64 编码）——此阶段服务器**不创建任何记录**（无状态），记录在 "ACK!" 验证通过后才创建；
-	- 如果 command 是 "ACK!"，则为第三次握手（无状态验证）：先用服务器密钥组（最多 2 个，见密钥轮换）对 "bid={协议头 source}&secret={载荷包头 mp-secret}&socket={服务器观察到的来源 ip:port}&time={数据区 token_time}"（按 key 字典序排序的键值对）重算 HMAC-SHA256（Base64）并与数据区 token 比对，全部不匹配则判定为不可信来源，直接丢弃、不应答（攻击者无法伪造 token，故无法触发任何应答）；匹配（说明包确为服务器签发、未被篡改）后再检查 token_time 是否超出有效窗口（handshake_token_timeout，默认 60 秒），超时则回复 "FAIL" 指令包（客户端重新握手）；否则按协议头 source bid 查表：记录不存在则创建 bid record（bid → socket、secret 取包内 mp-secret 并固定不变，连接即已确认）；记录已存在且 socket 匹配则幂等更新（重复 "ACK!" 或重新握手场景）；记录已存在但 socket 不同（bid 竞态冲突）则回复 "FAIL" 指令包（客户端重新握手）；
-	- 否则（其他系统指令，要求 source bid > 0）：source bid 为 0 属于上行校验违规，直接丢弃；先按来源 socket 查询内存分配表：记录存在（socket 已绑定 bid Z）时要求 source bid 必须等于 Z，否则判定为伪造来源直接丢弃、不应答；记录不存在（来源 socket 无绑定）时，检查 command 是否 PING/ACPT/DENY（只有这 3 条指令需要错误提示）：是则先检查载荷长度是否达到最低要求 ```manager_min_payload```（默认 100 字节）——达到则按“连接未确认”回复 "FAIL" 指令包（载荷同转发线程：数据区为服务器观察到的来源地址，文本头回显被拒指令的 command，不带 mp-verify，考虑到防放大攻击的需要，不带 Content-Type 和 Content-Length），客户端据此补发 "ACK!" 或重新握手；未达到则静默丢弃；其他指令（NOOP/FIN?）静默丢弃、不应答；凡 record.secret 已建立后收到的系统指令（"SYN?" 与 "ACK!" 除外：前者无记录、后者走无状态令牌验证），须先校验载荷文本头 mp-verify，校验失败视为不可信来源直接丢弃、不应答；然后根据 command 值进行相应的处理和应答（ACPT/DENY 按通行证管理流程处理，"PING" 回 "PONG"，"FIN?" 先将记录标记为离线 offline，再回 "FIN!" 挥手应答——不删除记录、不立即释放 bid，"NOOP" 清除 offline 标记后不应答，详见架构文档）；
-3. **转发线程**对转发包先按来源 socket 查询内存分配表：记录存在（该 socket 已绑定 bid Z）时要求 source bid 必须等于 Z，否则判定为伪造来源直接丢弃、不应答；匹配一致则更新发送方记录的活跃时间；记录不存在（来源 socket 无绑定，例如 "ACK!" 丢失后客户端尚未完成握手或客户端换网络）时，先判断协议 payloadLength 是否达到防放大门槛 unconfirmed_min_payload（默认 256 字节）：未达到则静默丢弃（防放大攻击）；达到则以 "FAIL"（载荷数据区为服务器观察到的来源地址，UDP 字段格式同 "SYN!"，文本头带 mp-src-command 回显被拒指令的 command，不带 mp-verify）通知客户端并丢弃；source bid 有效后，再检查 target：target 记录不存在则直接丢弃；target 记录不活跃（已标记离线 offline，或 last_time 超过 T_active 在线判定窗口、默认 60 秒）时——发送方已被收件人接纳（(source bid, 当前 key) 在 target 记录的通行证列表中）则回复 "FAIL"（载荷遵循载荷文档格式：数据区仅含 time ```{"time":...}```，文本头 mp-src-command 回显被拒数据包的 command（如 "DATA"）并携带收件人 bid（mp-src-target: 十进制整数），携带 mp-verify——发送方记录已确认、服务器有发送方的 secret）通知发送方，否则静默丢弃；转发前还须确认 (source bid, 当前 key) 在 target 记录的通行证列表中（收件人已通过 "ACPT" 接纳发送方），否则静默丢弃（不应答、不转发，防止暴露收件人的存在与接纳状态）；
+	- **【握手阶段】**如果 command 是 "SYN?"，则为第一次握手（唯一允许 source bid 为 0 的场景）：
+		- 分配 bid 与生成客户端密钥 secret、握手 token 等步骤见架构设计文档；
+		- 此阶段服务器**不创建任何新记录**（无状态），新记录在 "ACK!" 验证通过后才创建；
+	- **【确认阶段】**如果 command 是 "ACK!"，则为第三次握手（无状态验证）：
+		- 检查校验 token 信息、查询 bid record 分配表等步骤见架构设计文档；
+		- 直到这一步结束，新的 bid record 才会被创建；
+	- **【服务阶段】**如果是其他系统指令（要求 source bid > 0）：source bid 为 0 属于上行校验违规，直接丢弃；
+		- 先做来源检查（见架构设计文档），连接未确认或 source bid 不匹配均直接丢弃；
+		- 凡 bid record 已建立后收到的系统指令（"SYN?" 与 "ACK!" 除外：前者无记录、后者走无状态令牌验证），均须对**附加校验码**进行 HMAC-SHA256 校验（见安全提案），校验失败视为不可信来源直接丢弃、不应答；
+		- 以上校验全部通过之后，**更新活跃时间**```record.last_time = now```；
+		- 然后根据 command 值进行相应的处理和应答（详见架构文档）；
+		- 最后回复任何应答（DONE/FAIL/PONG/FIN!）之前均须先检查应答频率，超过 ```reply_rate_limit```（默认 10 次/秒）则静默丢弃、不再回复（见安全提案）；
+
+3. **转发线程**每条转发线程只负责 source bid 与本线程编号对应的转发任务。
+	- 正常情况下，必须先完成握手才能转发数据，所以拿到转发任务时要先检查发送者状态：
+		- 先做来源检查（见架构设计文档），连接未确认或 source bid 不匹配均直接丢弃；
+		- 凡 bid record 已建立后收到的数据包，均须对**附加校验码**进行 HMAC-SHA256 校验（见安全提案），校验失败视为不可信来源直接丢弃、不应答；
+	- 来源校验通过之后，**更新活跃时间**```record.last_time = now```，然后检查目标状态（见架构设计文档）；
+	- 以上校验全部通过之后，用接收方的 record.secret 重新对数据包进行签名（见安全提案），然后再执行转发操作。
 
 ## Bridge ID 管理
 
@@ -55,50 +80,26 @@ bid (32位无符号整数) 采用**全随机**方式生成：直接在 `0x000100
 ### 内存分配表
 
 以 bid 为 key，或者 socket 信息为 key，均可查询分配记录。
-
-记录字段包括：
-
-- bid
-- key  // "{ip}:{port}"
-- socket 信息
-- last_time  // 最后活跃时间
-- secret  // 握手密钥（已确认）：服务器在握手时生成并随 "SYN!" 下发（复用已确认记录时下发原值），"ACK!" 验证通过后创建记录时写入；一经写入不再改变，直到该记录被回收
-- offline  // 离线标记：收到 "FIN?" 后置位（记录保留、bid 不立即释放，仍按超时规则回收）；任何上行数据清除该标记并更新 last_time
-- allowlist  // 通行证列表：本记录持有者已接纳的发送方 (bid, key) 集合（允许向持有者发数据的白名单），由 ACPT/DENY 指令维护；随记录回收（purge）自动删除，无需额外清理
-
-> key 为 socket 信息的字符串形式（"{ip}:{port}"），创建记录时生成一次即可；由于 ip 和 port 固定不变，后续查询时直接取用该字段，无需每次重新拼接。
+记录字段（属性）见架构设计文档。
 
 服务器每次收到数据包并检查通过之后，就会更新 last_time 为当前时间；
-注意，只有管理线程和转发线程会更新 last_time：管理线程在收到客户端系统指令（如 "PING"）时更新，转发线程在转发包通过来源 socket 预检（socket 已绑定且 source bid 匹配）后更新；预处理线程只负责分拣、不查表、不更新。
+注意，只有管理线程和转发线程会更新 last_time：
+
+- **管理线程**在收到客户端系统指令并验证身份时更新；
+- **转发线程**在转发包通过来源 socket 预检后更新；
+- **预处理线程**只负责分拣、不查表、不更新。
 
 ### 分配与回收
 
-握手采用**无状态**方式："SYN?" 阶段服务器只做分配决策并计算验证令牌（token），**不创建任何记录**；记录在 "ACK!" 验证通过后才创建（创建即已确认，无需 pending_secret / acknowledged 字段，secret 固定不变）。
+握手采用**无状态**方式：
 
-服务器收到握手请求（"SYN?" 指令）时：
+- "SYN?" 阶段服务器只做分配决策并计算验证令牌（token），**不创建任何记录**；
+- 记录在 "ACK!" 验证通过后才创建（创建即已确认，secret 固定不变）。
 
-1. 先根据 socket 信息查询内存分配表，
-	1. 如果记录存在，则复用该记录中的 bid（重新握手，secret 取原 record.secret，无需再检查 source bid）；
-2. 如果请求中预设了 source bid（非 0），则一律按预订规则处理（无论来源是否 loopback）：
-	1. 先检查该 bid 是否合法：必须大于 65535（即不能预订保留给 loopback 的内定区间 H=0），不合法则回复 "FAIL" 指令包；
-	2. 合法则按该 bid 查表——当前 socket 已确认无绑定记录（见 1.），故记录存在则其 socket 必不相同（该 bid 已被其他 socket 占用），回复 "FAIL" 指令包（由客户端决定是否重新申请）；记录不存在（空闲）则采用该 bid（待 "ACK!" 时创建记录）；
-3. 来源 IP 为环回地址（loopback: 127.0.0.0/8, ::1/128）且请求中未预设 bid（source bid = 0）时，按内定规则分配 bid = port：
-	1. 如果该 bid 不存在对应的分配记录，或记录 socket 信息相同，则采用该 bid（待 "ACK!" 时创建/复用记录）；
-	2. 如果被其他 socket 占用，则判定为冲突，直接回复 "FAIL" 指令包（冲突协商由客户端进程自行处理）；
-4. 按前面的规则生成新 bid 并检查冲突：
-	1. 如果新 bid 不存在对应的分配记录，则采用该 bid（待 "ACK!" 时创建记录）；
-	2. 如果分配记录已存在且 socket 信息相同（小概率），则按 1.1. 复用该 bid；
-	3. 如果存在 bid 相同但 socket 信息不同的记录，则判定为冲突，无法占用此 bid，需重新生成 bid 并再次检查冲突（重试达到 M 次仍冲突，则由管理线程回复 "FAIL" 指令包，见生成规则）。
+服务器收到握手请求（"SYN?" 指令）时分配 bid；
 
-得到 bid（无论新建、复用、预订还是内定）之后，生成客户端密钥 secret（新建/内定/预订时随机生成，须用密码学安全随机数；复用已确认记录时取原 record.secret），并以服务器密钥对其关键信息计算验证令牌：
-
-> token = HMAC-SHA256(key = server_secret, message = UTF-8(规范字符串))
->
-> 规范字符串：字段按 key 字典序排序（bid < secret < socket < time），以 "&" 连接 "key=value"，例如：
->   bid=123&secret=YWJj&socket=1.2.3.4:5678&time=123
-> 其中 bid 为 10 进制整数、socket 为 "{ip}:{port}" 字符串、secret 为 Base64 编码、time 为服务器当前时间戳（秒，10 进制整数）；token 再 Base64 编码后随 "SYN!" 下发（载荷数据区 token 字段，token_time 字段为同一时间戳）。**此阶段不创建记录、不保存 bid 与 secret**（无状态）。
-
-客户端收到 "SYN!" 后，在 "ACK!" 中原样回传 secret（载荷文本头 mp-secret）、token 与 token_time（载荷数据区，数据区 time 为客户端当前时间戳），服务器验证通过后创建记录（见管理线程职责）；若 "ACK!" 丢失，客户端在发送下一个包时因服务器查不到 bid record 而收到 "FAIL"（连接未确认），据此补发 "ACK!" 或重新握手。
+客户端收到 "SYN!" 后，在 "ACK!" 中原样回传 secret、token 与 token_time，服务器验证通过后创建记录（见管理线程职责）；
+若 "ACK!" 丢失，客户端在发送下一个包时因服务器查不到 bid record 而收到 "FAIL"（连接未确认），据此补发 "ACK!" 或重新握手。
 
 > 每次创建分配记录时，都需要同时建立两个索引（分别以 bid、socket 信息为 key）指向该记录，以方便后面查询。
 > secret 一经确认写入记录后不再改变（重新握手仅下发原值），直到该记录被回收。
@@ -110,23 +111,21 @@ bid (32位无符号整数) 采用**全随机**方式生成：直接在 `0x000100
 - 生成 token 时：若 ```now - last_secret_time > server_secret_rotate_interval```（默认 600 秒），生成一个新随机密钥放入队头、更新 last_secret_time，并只保留最近 2 个密钥，然后取队头密钥计算；
 - 验证 token 时：取出全部密钥（最多 2 个）逐个重算比对，任一匹配即通过（旧 token 在旧密钥被轮换出列表之前仍可验证）。
 
-由于 "SYN?" 阶段不创建任何记录，握手洪流不产生任何共享状态、不占用内存，防洪由以下手段共同承担：
+由于 "SYN?" 阶段不创建任何记录，握手洪流不产生任何共享状态、不占用内存，
+防洪策略见安全提案。
 
-- **防放大**：要求第 1 次握手包 "SYN?" 载荷不小于 handshake_min_payload（默认 512 字节），使应答 "SYN!" 显著小于请求，攻击者无法以微小请求放大出大流量应答；载荷不足或来源为广播/多播地址的请求直接丢弃、不应答（见预处理线程校验）。转发线程对来源 socket 无绑定记录的数据包（连接未确认场景）单独设防放大门槛 unconfirmed_min_payload（默认 256 字节，见转发线程）——该门槛只针对**无签名**的转发数据包场景（"DATA" 不做每包校验、攻击者伪造成本低）；管理线程对无绑定来源且需回 "FAIL" 的指令（PING/ACPT/DENY）同样设防放大门槛 ```manager_min_payload```（默认 100 字节）：载荷不足直接丢弃、不应答，防止攻击者以微小请求触发 "FAIL" 应答造成反射放大（正常客户端最小指令载荷约 105 字节，高于门槛不受影响；NOOP/FIN? 无应答、无反射风险，无需门槛）；
-- **无状态计算成本**：每次 "SYN?" 仅消耗一次 HMAC 计算与一次 bid 分配决策（只读查表），不落任何内存；洪水主要打满攻击者自身带宽与服务器 CPU，属可线性扩展的正常负载；
-- **token 有效窗口**：token 验证通过后，token_time 超出 handshake_token_timeout（默认 60 秒）的 "ACK!" 回复 "FAIL"，防止旧握手包的重放与滞留；
-- 更高强度的握手洪流（G 级）属运维层（防火墙包速率限制、流量清洗、Anycast/带宽冗余）的范畴，单机应用无法在协议层抵御。
+管理线程空闲时执行回收职责：按 `record_recycle_interval`（默认 10 分钟）调用 ```purge(now)``` 回收超过 expires 的记录（同时删除对应的 bid 和 socket 信息索引）。
 
-管理线程空闲时执行回收职责：按 record_recycle_interval（默认 10 分钟）调用 purge(now) 回收超过 expires 的记录（同时删除对应的 bid 和 socket 信息索引）。
+```purge(now)``` 只负责回收超过 expires（默认 24 小时）的记录（```last_time < now - expires```），调用间隔默认 10 分钟，可通过配置文件 `record_recycle_interval` 调整；
+正常运营时分配表规模为在线用户数（万级），一次遍历毫秒级，10 分钟一次的摊销成本可忽略。
+实现上建议先只读遍历收集过期记录、再统一删除，以缩短持锁时间。
 
-purge(now) 只负责回收超过 expires（默认 24 小时）的记录（```last_time < now - expires```），调用间隔默认 10 分钟，可通过配置文件 record_recycle_interval 调整；正常运营时分配表规模为在线用户数（万级），一次遍历毫秒级，10 分钟一次的摊销成本可忽略。实现上建议先只读遍历收集过期记录、再统一删除，以缩短持锁时间。
-
-> 回收时效默认 24 小时（expires = 3600 * 24，秒），可通过配置文件 record_expires 调整。
+> 回收时效默认 24 小时（expires = 3600 * 24，秒），可通过配置文件 `record_expires` 调整。
 
 - **不做惰性回收**：管理线程在按 bid 或 socket 信息查询分配表时**不检查是否过期**，记录存在即按有效记录处理（分配与冲突判定逻辑保持简单）；过期记录的回收统一由 purge 完成。
 - 按来源 IP 的 "SYN?" 限速在 UDP 下可被伪造来源地址绕过，不作为协议层防洪水手段。
 
-> 注：“在线”判定窗口 T_active（见工作流文档，默认 60 秒，可通过配置文件 record_active_timeout 调整）与回收时效 expires（默认 24 小时，可通过配置文件 record_expires 调整）是两个不同的参数：T_active 用于转发线程判断记录是否活跃（在线），expires 用于管理线程回收超时记录。
+> 注：“在线”判定窗口 `T_active`（见工作流文档，默认 60 秒，可通过配置文件 `record_active_timeout` 调整）与回收时效 `expires`（默认 24 小时，可通过配置文件 `record_expires` 调整）是两个不同的参数：`T_active` 用于转发线程判断记录是否活跃（在线），`expires` 用于管理线程回收超时记录。
 
 ### 内定与预订机制
 
@@ -139,14 +138,14 @@ purge(now) 只负责回收超过 expires（默认 24 小时）的记录（```las
 
 ## 流量控制
 
-限流采用**滑动窗口**方式：每条转发线程在 `forward_window` 秒内最多处理 `forward_limit_per_window` 个任务，达到上限后本轮窗口内不再取新任务，等待下一个窗口再继续；超过队列容量（forwarder_queue_size）的新包直接丢弃并记录日志（由客户端可靠传输机制重试）。
+限流采用**滑动窗口**方式：每条转发线程在 `forward_window` 秒内最多处理 `forward_limit_per_window` 个任务，达到上限后本轮窗口内不再取新任务，等待下一个窗口再继续；超过队列容量（`forwarder_queue_size`）的新包直接丢弃并记录日志（由客户端可靠传输机制重试）。
 
 当前默认配置下单线程上限为 `4096 / 0.1s = 40960 包/秒`，8 条线程合计约 `327,680 包/秒`；单线程转发队列容量 `65536`（最坏约 64 MiB/线程，按满载荷 1KiB 计），足以缓冲约 1.6 秒的突发流量。相关参数均可通过配置文件调整（见 server 文档）：
 
-- forwarders（线程数，默认 8）
-- forwarder_queue_size（单线程转发队列容量，默认 65536）
-- forward_limit_per_window（每窗口处理上限，默认 4096）
-- forward_window（窗口时长，默认 0.1 秒）
+- `forwarders`（线程数，默认 8）
+- `forwarder_queue_size`（单线程转发队列容量，默认 65536）
+- `forward_limit_per_window`（每窗口处理上限，默认 4096）
+- `forward_window`（窗口时长，默认 0.1 秒）
 
 ## 工程目录
 
@@ -224,23 +223,20 @@ record_active_timeout = 60.0
 # handshake packet "SYN?" (bytes, default: 512; keeps the "SYN!"
 # reply smaller than the request to prevent amplification)
 handshake_min_payload = 512
-# amplification guard for the forwarder: minimum payload length of a
-# packet from a source socket with no bound record (the "connection
-# not confirmed" case, e.g. a lost "ACK!") before the forwarder
-# replies "FAIL"; below this the packet is silently dropped. This
-# guard exists only for the unsigned data plane ("DATA" is not signed
-# per packet, so forged packets are cheap); the manager thread applies
-# its own guard to the unconfirmed "FAIL" reply path, see
-# manager_min_payload below (bytes, default: 256)
-unconfirmed_min_payload = 256
-# amplification guard for the manager thread: minimum payload length
-# of a system command (PING/ACPT/DENY) from a source socket with no
-# bound record (the "connection not confirmed" case, e.g. a lost
-# "ACK!") before the manager replies "FAIL"; below this the packet is
-# silently dropped. NOOP/FIN? never reply, so they need no guard
-# (bytes, default: 100; the smallest legit command payload is about
-# 105 bytes, above the threshold)
-manager_min_payload = 100
+# unconfirmed reply buckets: number of shared reply counters for
+# source sockets with no bound record (the "connection not confirmed"
+# case, e.g. a lost "ACK!"); the bucket is selected by
+# hash("ip:port") % U, and each bucket shares the reply_rate_limit
+# below, so forged unconfirmed packets can trigger at most
+# reply_rate_limit FAIL replies per second per bucket (default: 1024)
+unconfirmed_reply_buckets = 1024
+# reply rate limit: maximum reply packets (PONG/DONE/FIN!/FAIL
+# combined) sent per bid per second; caps reflection amplification
+# triggered by forged confirmed-source packets, even when the attacker
+# knows the victim's secret (e.g. by sniffing); when the limit is
+# exceeded the reply is silently dropped (packets per second, default:
+# 10; a normal client replies far less often, e.g. PONG once per 16 s)
+reply_rate_limit = 10
 # server secret rotation: a new server secret is generated and put at
 # the head of server_secrets when it has been longer than this since
 # the last rotation; at most the latest 2 secrets are kept for token

@@ -61,8 +61,8 @@ class MessagePacket implements Magpie {
     /// command
     final int command;
     
-    /// body
-    final Payload payload;
+    /// payload
+    final Uint8List? payload;
     
     // ...
     
@@ -75,6 +75,7 @@ class MessagePacket implements Magpie {
         }
         return data;
     }
+    
 }
 ```
 
@@ -83,7 +84,7 @@ class MessagePacket implements Magpie {
 客户端与服务器通信的消息包，包括委托服务器中转的消息包。
 
 ```dart
-final class BridgePacket extends MessagePacket {
+class BridgePacket extends MessagePacket {
     BridgePacket._(Uint8List? buffer, {
         
         required super.ack,
@@ -135,7 +136,7 @@ final class BridgePacket extends MessagePacket {
          
         required int command,
         
-        required Payload payload,
+        required Uint8List? payload,
     }) => BridgePacket._(buffer,
         
         ack: ack,
@@ -183,7 +184,7 @@ final class BridgePacket extends MessagePacket {
          
         required int command,
         
-        required Payload payload,
+        required Uint8List? payload,
     }) => BridgePacket._(null,
         
         ack: ack,
@@ -210,7 +211,7 @@ final class BridgePacket extends MessagePacket {
     /// 第一次握手
     /// [source] 为预订 bid（可选）：0 表示普通申请（由服务器分配），
     /// 非 0 表示客户端希望预订该 bid（新建预订须 > 65535，若是 loopback 重握手复用之前的内定 bid，可传 = port ≤ 65535 的原值）。
-    factory BridgePacket.syn(Payload? request, {
+    factory BridgePacket.syn(Uint8List? request, {
         int source = 0
     }) => BridgePacket.create(
         ack: 0,
@@ -228,9 +229,9 @@ final class BridgePacket extends MessagePacket {
     );
     
     /// 第二次握手
-    /// response 为载荷数据区（含 UDP、token、token_time，由服务器逻辑构造；
-    /// 文本头 mp-secret 携带握手密钥，由调用方加入）
-    factory BridgePacket.synAck(Payload? response, {
+    /// response 为载荷数据区（含 secret/token/token_time/UDP/time，
+    /// 由服务器逻辑构造，纯 JSON 格式）
+    factory BridgePacket.synAck(Uint8List? response, {
         required int target,  // 服务器为该客户端分配的 bid
     }) => BridgePacket.create(
         ack: 1,
@@ -248,9 +249,9 @@ final class BridgePacket extends MessagePacket {
     );
     
     /// 第三次握手
-    /// response 原样回传第二次握手包中的 token/token_time（数据区 time 取
-    /// 客户端当前时间；文本头 mp-secret 携带握手密钥，由调用方加入）
-    factory BridgePacket.ack(Payload? response, {
+    /// response 原样回传第二次握手包中的 secret/token/token_time
+    /// （数据区 time 取客户端当前时间），纯 JSON 格式
+    factory BridgePacket.ack(Uint8List? response, {
         required int source,  // 从第二次握手包中得到的 target
     }) => BridgePacket.create(
         ack: 1,
@@ -271,7 +272,7 @@ final class BridgePacket extends MessagePacket {
     /// 1. bid 分配失败：target = 期望的（预订）bid；response 仅含 time；
     /// 2. "ACK!"包缺失：target = 期望或已分配的 bid；response 为 socket 信息（含 time，不含 Content-Type 和 Content-Length）；
     /// 3. 无法修改通行证：target = 已分配的 bid；response 为失败的 bid 列表（含 time）。
-    factory BridgePacket.fail(Payload? response, {
+    factory BridgePacket.fail(Uint8List? response, {
         required int target,  // 客户端 bid（期望或已分配）
         int sn = 0,
         int index = 0,
@@ -293,7 +294,7 @@ final class BridgePacket extends MessagePacket {
     
     /// 成功完成
     /// 修改通行证：target = 已分配的 bid；response 为请求的 bid 列表（含 time）。
-    factory BridgePacket.done(Payload? response, {
+    factory BridgePacket.done(Uint8List? response, {
         required int target,
         int sn = 0,
         int index = 0,
@@ -315,7 +316,7 @@ final class BridgePacket extends MessagePacket {
     
     /// 添加通行证
     /// 允许通行的 source bid 列表放在 request（含 time）
-    factory BridgePacket.acpt(Payload? request, {
+    factory BridgePacket.acpt(Uint8List? request, {
         required int source,
     }) => BridgePacket.create(
         ack: 0,
@@ -334,7 +335,7 @@ final class BridgePacket extends MessagePacket {
     
     /// 撤销通行证
     /// 禁止通行的 source bid 列表放在 request（含 time）
-    factory BridgePacket.deny(Payload? request, {
+    factory BridgePacket.deny(Uint8List? request, {
         required int source,
     }) => BridgePacket.create(
         ack: 0,
@@ -352,7 +353,7 @@ final class BridgePacket extends MessagePacket {
     );
     
     /// 心跳
-    factory BridgePacket.ping(Payload? request, {
+    factory BridgePacket.ping(Uint8List? request, {
         required int source,
     }) => BridgePacket.create(
         ack: 0,
@@ -370,8 +371,8 @@ final class BridgePacket extends MessagePacket {
     );
     
     /// 心跳应答
-    /// （packet 为收到的 ping 包；response 为应答信息，遵循载荷文档格式（含 time 与 mp-verify），由调用方构造）
-    factory BridgePacket.pong(Magpie packet, [Payload? response]) => BridgePacket.create(
+    /// （packet 为收到的 ping 包；response 为应答信息，遵循载荷文档格式（含 time），由调用方构造）
+    factory BridgePacket.pong(Magpie packet, [Uint8List? response]) => BridgePacket.create(
         ack: 1,
         
         /// bid 对调，原路返回
@@ -389,7 +390,7 @@ final class BridgePacket extends MessagePacket {
     );
     
     /// 第一次挥手
-    factory BridgePacket.fin(Payload? request, {
+    factory BridgePacket.fin(Uint8List? request, {
         required int source,
     }) => BridgePacket.create(
         ack: 0,
@@ -407,8 +408,8 @@ final class BridgePacket extends MessagePacket {
     );
     
     /// 第二次挥手
-    /// （packet 为收到的 fin 包；response 为应答信息，遵循载荷文档格式（含 time 与 mp-verify），由调用方构造）
-    factory BridgePacket.finAck(Magpie packet, [Payload? response]) => BridgePacket.create(
+    /// （packet 为收到的 fin 包；response 为应答信息，遵循载荷文档格式（含 time），由调用方构造）
+    factory BridgePacket.finAck(Magpie packet, [Uint8List? response]) => BridgePacket.create(
         ack: 1,
         
         /// bid 对调，原路返回
@@ -427,7 +428,7 @@ final class BridgePacket extends MessagePacket {
     
     /// 无操作（保活/自愈）
     /// 用于意外收到 "FIN!" 时立即回复，以秒级恢复在线状态，无需应答（含 time）
-    factory BridgePacket.noop(Payload? request, {
+    factory BridgePacket.noop(Uint8List? request, {
         required int source,
     }) => BridgePacket.create(
         ack: 0,
@@ -468,7 +469,7 @@ final class BridgePacket extends MessagePacket {
     
     /// 数据应答包，通过服务器转发“确认收到”给原发送方
     /// （packet 为收到的数据包；response 为附加信息，默认为空）
-    factory BridgePacket.copy(Magpie packet, [Payload? response]) => BridgePacket.create(
+    factory BridgePacket.copy(Magpie packet, [Uint8List? response]) => BridgePacket.create(
         ack: 1,
         
         // bid 对调，原路返回
@@ -493,7 +494,7 @@ final class BridgePacket extends MessagePacket {
 客户端与客户端直接通信的消息包。
 
 ```dart
-final class DirectPacket extends MessagePacket {
+class DirectPacket extends MessagePacket {
     DirectPacket._(Uint8List? buffer, {
         
         required super.ack,
@@ -548,7 +549,7 @@ final class DirectPacket extends MessagePacket {
          
         required int command,
         
-        required Payload payload,
+        required Uint8List? payload,
     }) => DirectPacket._(buffer,
         
         ack: ack,
@@ -596,11 +597,11 @@ final class DirectPacket extends MessagePacket {
          
         required int command,
         
-        required Payload payload,
+        required Uint8List? payload,
     }) => DirectPacket._(null,
         
         ack: ack,
-        // bid: 1,
+        // bid: 0,
         cmd: calcCmd(command),
         dsn: calcDsn(sn),
         ext: calcExt(count),
