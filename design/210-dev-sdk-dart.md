@@ -210,7 +210,9 @@ class BridgePacket extends MessagePacket {
     
     /// 第一次握手
     /// [source] 为预订 bid（可选）：0 表示普通申请（由服务器分配），
-    /// 非 0 表示客户端希望预订该 bid（新建预订须 > 65535，若是 loopback 重握手复用之前的内定 bid，可传 = port ≤ 65535 的原值）。
+    /// 非 0 表示客户端希望预订该 bid（新建预订须 > 65535；
+    /// 若是 loopback 重握手复用之前的内定 bid，且该 socket 记录尚未被回收，可传 = port ≤ 65535 的原值；
+    /// 记录已回收时该 bid 不再可用，应传 0 重新申请）。
     factory BridgePacket.syn(Uint8List? request, {
         int source = 0
     }) => BridgePacket.create(
@@ -268,11 +270,7 @@ class BridgePacket extends MessagePacket {
         payload: response,
     );
     
-    /// 失败（response 载荷格式见载荷文档，按场景区分）：
-    /// 1. bid 分配失败：target = 期望的（预订）bid；response 仅含 {"time":...}；
-    /// 2. 连接未确认（ACK! 缺失）：target = 已分配的 bid；response 含 {"src-command":"<被拒 command 的十六进制>","time":...}；
-    /// 3. target 离线：target = 已分配的 bid；response 含 {"src-command":"...","src-target":<离线收件人 bid>,"time":...}；
-    /// 4. 无法修改通行证：target = 已分配的 bid；response 为 {"src-command":"<hex ACPT 或 DENY>","sources":[<失败 bid 列表>],"time":...}。
+    /// 失败（response 载荷格式见载荷文档，按场景区分）
     factory BridgePacket.fail(Uint8List? response, {
         required int target,  // 客户端 bid（期望或已分配）
         int sn = 0,
@@ -294,7 +292,7 @@ class BridgePacket extends MessagePacket {
     );
     
     /// 成功完成
-    /// 修改通行证：target = 已分配的 bid；response 为请求的 bid 列表（含 time）。
+    /// 修改通行证：target = 已分配的 bid；response 为请求的 bid 列表（具体格式见载荷文档）。
     factory BridgePacket.done(Uint8List? response, {
         required int target,
         int sn = 0,
