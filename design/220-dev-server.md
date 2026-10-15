@@ -6,8 +6,8 @@
 
 正如 **Magpie Bridge Architecture** 里定义的那样：
 
-1. 服务器通过一个**接收线程**从绑定的 UDP 端口中读取数据包，然后直接放入等待处理队列；
-2. **预处理线程**从前面的等待处理队列取出数据包，进行基础校验之后，根据 target bid 决定是转交给“管理线程”处理，还是转交给“转发线程”处理；
+1. 服务器通过一个**接收线程**从绑定的 UDP 端口中读取数据包，连同来源 socket 信息封装成任务对象，放入等待处理队列；
+2. **预处理线程**从前面的等待处理队列取出任务，进行基础校验之后，根据 target bid 决定是转交给“管理线程”处理，还是转交给“转发线程”处理；
 3. 服务器有一个**管理线程**，专门负责 bid 的分配管理、超时记录回收（purge）、通行证管理（ACPT/DENY），以及几个系统命令的应答；
 4. 服务器有 W 个**转发线程**，专门负责转发数据。
 
@@ -56,7 +56,7 @@
 
 bid 为一个 32 位无符号整数，实际应用中取高 16 位整数 H（0 ~ 65535，其中 0 为内定保留区间；1 ~ 32767 为当前启用的普通分配与预订区间；32768 ~ 65535 为预留区间，当前不启用但合法，仅可能由客户端预订产生，见下文）与低 16 位整数 L（0 ~ 65535）合并而成。
 
-socket 信息包括 ip 和 port 两个值，当其作为 key 查询时为 "{ip}:{port}" 的字符串。
+socket 信息包括 ip 和 port 两个值（类型为 SocketAddress，见用户信息记录文档附 2），当其作为 key 查询时为 "{ip}:{port}" 的字符串（即 SocketAddress 的字符串形式）。
 
 设计要求： bid 与 socket 信息一一对应。
 
@@ -114,7 +114,7 @@ bid (32位无符号整数) 采用**全随机**方式生成：直接在 `0x000100
 由于 "SYN?" 阶段不创建任何记录，握手洪流不产生任何共享状态、不占用内存，
 防洪策略见安全提案。
 
-管理线程每轮循环先执行回收检查：若距上次调用已超过 `record_recycle_interval`（默认 10 分钟），调用 ```purge(now)``` 回收超过 expires 的记录（同时删除对应的 bid 和 socket 信息索引）；随后从管理请求队列取出下一条指令处理（队列为空时阻塞等待）。
+管理线程每轮循环先执行回收检查：若距上次调用已超过 `record_recycle_interval`（默认 10 分钟），调用 ```purge(now)``` 回收超过 expires 的记录（同时删除对应的 bid 和 socket 信息索引）；随后从管理请求队列取出下一个任务处理（队列为空时阻塞等待）。
 
 ```purge(now)``` 只负责回收超过 expires（默认 24 小时）的记录（```last_time < now - expires```），调用间隔默认 10 分钟，可通过配置文件 `record_recycle_interval` 调整；
 正常运营时分配表规模为在线用户数（万级），一次遍历毫秒级，10 分钟一次的摊销成本可忽略。
@@ -138,7 +138,7 @@ bid (32位无符号整数) 采用**全随机**方式生成：直接在 `0x000100
 
 ## 流量控制
 
-限流采用**滑动窗口**方式：每条转发线程在 `forward_window` 秒内最多处理 `forward_limit_per_window` 个任务，达到上限后本轮窗口内不再取新任务，等待下一个窗口再继续；超过队列容量（`forwarder_queue_size`）的新包直接丢弃并记录日志（由客户端可靠传输机制重试）。
+限流采用**滑动窗口**方式：每条转发线程在 `forward_window` 秒内最多处理 `forward_limit_per_window` 个任务，达到上限后本轮窗口内不再取新任务，等待下一个窗口再继续；超过队列容量（`forwarder_queue_size`）的新任务直接丢弃并记录日志（由客户端可靠传输机制重试）。
 
 当前默认配置下单线程上限为 `4096 / 0.1s = 40960 包/秒`，8 条线程合计约 `327,680 包/秒`；单线程转发队列容量 `65536`（最坏约 64 MiB/线程，按满载荷 1KiB 计），足以缓冲约 1.6 秒的突发流量。相关参数均可通过配置文件调整（见 server 文档）：
 
@@ -236,6 +236,16 @@ unconfirmed_reply_buckets = 1024
 # record; when the limit is exceeded the reply is silently dropped
 # (packets per second, default: 10)
 reply_rate_limit = 10
+# allowlist capacity: maximum number of entries in a bid record's
+# allowlist; an "ACPT" that would exceed this limit is rejected as a
+# whole (no bid is added) and answered with "FAIL", bounding the memory
+# a forged ACPT flood can occupy (entries, default: 1000)
+allowlist_max_entries = 1000
+# NOOP immunity window: after a "NOOP" that cancels a forged "FIN!" the
+# record's last_noop_time is refreshed; a later "FIN?" within this
+# window is ignored (not marked offline, no "FIN!" reply), so a forged
+# "FIN?" flood cannot keep the victim offline (seconds, default: 2.0)
+noop_immunity_window = 2.0
 # server secret rotation: a new server secret is generated and put at
 # the head of server_secrets when it has been longer than this since
 # the last rotation; at most the latest 2 secrets are kept for token
@@ -263,6 +273,6 @@ forwarder_queue_size = 65536
 **规则说明**：
 
 1. 所有时间值均为**浮点数的秒**（如 0.1 秒），代码内部自行转换为毫秒等内部单位；
-2. 容量类参数（waiting_queue_size、manager_queue_size、forwarder_queue_size、socket_buffer_length）均为整数：前三者是包数，后者是字节数；
+2. 容量类参数均为整数：waiting_queue_size、manager_queue_size、forwarder_queue_size 为任务数（任务即数据包与来源 socket 信息的封装，见架构文档），allowlist_max_entries 为条目数，socket_buffer_length 为字节数；
 3. 所有键缺失、段缺失或文件缺失时均回退到代码默认值（host 默认 0.0.0.0、port 默认 9527、forwarders 默认 8，与其余键行为一致）；
 4. 命令行 --config 指定的路径优先于默认路径；配置文件不存在时不报错，直接使用全部默认值。

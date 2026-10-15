@@ -272,7 +272,7 @@ class BridgePacket extends MessagePacket {
     /// 1. bid 分配失败：target = 期望的（预订）bid；response 仅含 {"time":...}；
     /// 2. 连接未确认（ACK! 缺失）：target = 已分配的 bid；response 含 {"src-command":"<被拒 command 的十六进制>","time":...}；
     /// 3. target 离线：target = 已分配的 bid；response 含 {"src-command":"...","src-target":<离线收件人 bid>,"time":...}；
-    /// 4. 无法修改通行证：target = 已分配的 bid；response 为 {"sources":[<失败 bid 列表>],"time":...}。
+    /// 4. 无法修改通行证：target = 已分配的 bid；response 为 {"src-command":"<hex ACPT 或 DENY>","sources":[<失败 bid 列表>],"time":...}。
     factory BridgePacket.fail(Uint8List? response, {
         required int target,  // 客户端 bid（期望或已分配）
         int sn = 0,
