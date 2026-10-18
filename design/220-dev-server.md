@@ -75,7 +75,7 @@ bid (32位无符号整数) 采用**全随机**方式生成：直接在 `0x000100
 ### 冲突判定
 
 通过 bid 查询，如果记录不存在，或者记录中的 socket 信息相同，则无冲突；
-反之，只要记录中的 socket 信息与当前不同，则判定为冲突（记录回收仅由管理线程在空闲时通过 purge 完成，其他线程不做超时覆盖判断）。
+反之，只要记录中的 socket 信息与当前不同，则判定为冲突（记录回收仅由管理线程周期触发 purge 完成，其他线程不做超时覆盖判断，见下文“分配与回收”）。
 
 ### 内存分配表
 
@@ -237,9 +237,10 @@ unconfirmed_reply_buckets = 1024
 # (packets per second, default: 10)
 reply_rate_limit = 10
 # allowlist capacity: maximum number of entries in a bid record's
-# allowlist; an "ACPT" that would exceed this limit is rejected as a
-# whole (no bid is added) and answered with "FAIL", bounding the memory
-# a forged ACPT flood can occupy (entries, default: 1000)
+# allowlist; an "ACPT" that would exceed this limit has the overflowing
+# entries skipped (the rest still apply) and is answered with "FAIL"
+# carrying the failed bid subset, bounding the memory a forged ACPT
+# flood can occupy (entries, default: 1000)
 allowlist_max_entries = 1000
 # NOOP immunity window: after a "NOOP" that cancels a forged "FIN!" the
 # record's last_noop_time is refreshed; a later "FIN?" within this

@@ -146,7 +146,8 @@ bool ok = (packet is ReliablePacket) && packet.verify(record.secret);
   受害者无法单方解除（"DENY" 仅删自己侧），只能由应用层屏蔽，或重新握手更换 bid 摆脱。
 
 allowlist 条目数设有上限 `allowlist_max_entries`（默认 1000），
-达到上限时 ACPT 指令整体拒绝（不添加任何 bid），回复 "FAIL"，
+达到上限后新条目无法写入：ACPT 中空间不足的条目被跳过（不写入 A 侧），在应答中回显失败子集（见用户信息记录文档），
+已生效的修改保留（B 侧 accept 先行，不受 A 侧空间影响），
 以避免攻击者通过大量 ACPT 无限膨胀记录占用的内存。
 
 因此，当正常用户收到了这类应答时，应检查载荷中的 bid list，并与本地实际的 allowlist 比对：

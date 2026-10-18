@@ -24,10 +24,21 @@ Record 属性：
 
 ### 通行证
 
-当客户端 A 准备 ACPT 多个 bid 时，先逐个查询 bid record 分配表，
-任意一个记录不存在即拒绝添加，回复 "FAIL" 并丢弃此指令_退出_（列表中包含发起方自身 bid 亦视为无效，整体拒绝）；
-若 A.record.allowlist 条目数已达上限，同样整体拒绝并回复 "FAIL"（口径见安全提案）；
-当所有记录都找到之后，再逐个执行以下**添加流程**，完成后回复 "DONE" 通知客户端：
+当客户端 A 准备 ACPT 多个 bid 时，先逐个查询 bid record 分配表，按错误类型分类处理：
+
+- **格式类错误**（bid 为负数、0、或等于发起方自身 bid）——客户端编码错误，整体拒绝（不处理任何 bid），回复 "FAIL" 并丢弃此指令退出；
+- **状态类错误**（bid 记录不存在、allowlist 空间不足）——逐条跳过，仅该条不执行，继续处理其余 bid，最后在应答中回显失败子集。
+
+对通过的 bid 逐个执行以下**添加流程**：先修改 Permit（B 侧共享引用立即生效），再检查 X.record.allowlist 剩余空间，空间足够才写入 A 侧。全部处理完后：
+
+- 存在失败条目 → 回复 "FAIL"，载荷 sources 回显**未成功的 bid 子集**（部分成功时不另发 "DONE"——成功条目由客户端以请求列表减去失败子集得知，或直接忽略、仅重试失败子集）；
+- 全部成功 → 回复 "DONE"，载荷 sources 回显**实际写入的 bid 列表**。
+
+> 将"修改 Permit"放在"写入 A 侧 allowlist"之前，是有意为之：
+> Permit 的 accept 修改的是双方共享的对象（B 侧引用立即生效）；
+> 若 A 被攻击（allowlist 已满），写入 A 侧会失败，但 B 侧 permit 已生效，
+> 只要 B 侧存在共享 permit（B 曾 ACPT 过 A），A 仍可通过 B 侧的有效通行证与 B 正常通讯；
+> 空间不足时该条跳过（A 侧不写入），但 B 侧已生效的修改保留——客户端收到 "FAIL" 后仅需对失败子集重试（幂等）。
 
 #### 添加通行证
 
@@ -37,20 +48,33 @@ Record 属性：
 ```dart
     // 先在 A 的记录中查找属于 B 的通行证
     var permit = X.record.allowlist[Y];
-    if (permit == null) {
-        // 如果通行证不存在，则在 B 的记录中查找属于 A 的通行证
-        permit = Y.record.allowlist[X];
-        if (permit == null) {
-            // 如果仍然不存在，则新建一个属于 B 的通行证
-            permit = Permit(Y.record);
-        } else {
-            // 如果存在，则绑定 B 的信息
-            permit.accept(Y.record);
-        }
-        // 然后添加到 A 的记录中
-        X.record.allowlist[Y] = permit;
+    if (permit != null) {
+        // 通行证已存在（此通行证必含对 B 的授权）
+        // 无需更新，直接返回
+        return permit;
     }
-    // 成功，返回此通行证
+    // 本地通行证不存在，则在 B 的记录中查找属于 A 的通行证
+    permit = Y.record.allowlist[X];
+    if (permit != null) {
+        // 如果存在（通常是因为 B 先发起 ACPT）
+        // 则添加对 B 的授权
+        permit.accept(Y.record);
+        // （注意：此时 B 侧共享引用立即生效）
+    } else {
+        // 如果仍然不存在（正常情况下是因为 A 先发起 ACPT）
+        // 则新建一个属于 B 的通行证（含对 B 授权）
+        permit = Permit(Y.record);
+    }
+    // 剩余空间检查
+    if (X.record.allowlist.length < allowlistMaxEntries) {
+        // 空间足够：将带对 B 授权的通行证写入 A 的记录表
+        X.record.allowlist[Y] = permit;
+        // 写入成功，返回此通行证
+        return permit;
+    }
+    // A 的记录表空间不足，无法写入
+    // 返回 null 表示添加失败
+    return null;
 ```
 
 一个通行证应该包含双方 socket 信息。
@@ -64,7 +88,7 @@ Record 属性：
 - 必须符合 bid 取值范围规定（0 <= bid <= 4294967295），不能是负数（负数仅出现在“清空通行证”）；
 - 不能为 0（服务器保留），不能等于发送者自身的 bid（不能添加自身自然也不需要删除自身）；
 
-如果不符合上述规定，则返回 "FAIL" 并带上原 "sources" 信息通知发送着；
+如果不符合上述规定（格式类错误），则返回 "FAIL" 并带上**格式非法的 bid 子集**通知发送者（整体拒绝，不处理任何 bid）；
 否则逐个在客户端 A（bid=X）的记录中删除映射即可：
 
 ```dart
@@ -72,6 +96,8 @@ Record 属性：
 ```
 
 如果 B 的记录不存在，也当作删除成功（幂等）。
+
+全部处理完（无格式类错误）后回复 "DONE"，载荷 sources 回显**实际删除的 bid 列表**（见载荷格式规范）。
 
 通行证为双向同意关系：单方 "DENY" 仅在发起方记录中删除映射，
 对方记录中的有效通行证仍在，通信不受影响（防伪造删除，见安全提案）；

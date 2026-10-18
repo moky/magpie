@@ -270,7 +270,8 @@ class BridgePacket extends MessagePacket {
         payload: response,
     );
     
-    /// 失败（response 载荷格式见载荷文档，按场景区分）
+    /// 失败应答
+    /// 服务器向客户端返回失败：target = 已分配的 bid；response 载荷按场景区分（bid 分配失败、对端离线、通行证修改失败等，具体格式见载荷文档）。
     factory BridgePacket.fail(Uint8List? response, {
         required int target,  // 客户端 bid（期望或已分配）
         int sn = 0,
@@ -291,8 +292,8 @@ class BridgePacket extends MessagePacket {
         payload: response,
     );
     
-    /// 成功完成
-    /// 修改通行证：target = 已分配的 bid；response 为请求的 bid 列表（具体格式见载荷文档）。
+    /// 成功应答
+    /// 服务器向客户端返回成功：target = 已分配的 bid；response 载荷按场景区分（如通行证修改成功回显实际写入的 bid 列表，具体格式见载荷文档）。
     factory BridgePacket.done(Uint8List? response, {
         required int target,
         int sn = 0,
