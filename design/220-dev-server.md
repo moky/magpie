@@ -251,6 +251,18 @@ noop_immunity_window = 2.0
 # the last rotation; at most the latest 2 secrets are kept for token
 # verification (seconds, default: 600.0 = 10 minutes)
 server_secret_rotate_interval = 600.0
+# app secret (enigma) file: path to the application-secret JSON file
+# (see the "enigma" MIP). When unset or empty, the file is missing,
+# unparsable, or its "enigmas" map is empty, the server runs in
+# non-encrypted mode (default: unset; uncomment the example below or
+# set this value to enable)
+# app_secret_file = /etc/magpie/private/enigma.json
+app_secret_file =
+# app secret reload interval: the manager thread re-reads app_secret_file
+# this often; on success the in-memory map is replaced wholesale (key
+# rotation/revocation takes effect), on failure or missing file the old
+# map is kept (seconds, default: 600.0 = 10 minutes)
+app_secret_reload_interval = 600.0
 # handshake token timeout: an "ACK!" whose token_time is older than
 # this is rejected (seconds, default: 60.0; a normal handshake
 # completes in milliseconds, this only guards against replay and
