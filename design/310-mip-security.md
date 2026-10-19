@@ -165,8 +165,8 @@ allowlist 条目数设有上限 `allowlist_max_entries`（默认 1000），
 应立即发送 "NOOP" 给服务器取消这个“下线”操作；
 服务器收到 "NOOP" 之后即将 A.record.offline 改回 false，并将 record.last_noop_time 更新为当前服务器时间。
 
-在接下来的 `noop_immunity_window`（默认 2 秒）内，服务器对来自该客户端的 "FIN?" 指令一律忽略：
-不修改 offline，也不应答。攻击者反复发送 "FIN?" 也无法将受害者持续踢下线。
+在接下来的 `noop_immunity_window`（默认 2 秒）内，服务器收到该客户端的 "FIN?" 指令时仍应答 "FIN!"，但不修改 offline。
+客户端若持续发送 "NOOP" 续期免疫窗口（如每 1 秒一次），攻击者反复发送 "FIN?" 便无法将受害者踢下线，受害者的数据转发也不受影响。
 
 > ```last_noop_time``` 未设置（该客户端从未发送过 "NOOP"）时，视为已超出免疫窗口，"FIN?" 不受限。
 

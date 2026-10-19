@@ -222,7 +222,7 @@ final class MessageParser implements MagpieParser {
 由于收到的 UDP 包一定是完整的（彼此独立，不存在 TCP 的粘包问题），所以收到一个数据包（data）之后，先按 header 校验规则进行处理，
 校验通过之后，用取得的 header_length 和 payload_length 计算实际包长度 packet_length，然后和收到的 UDP 包 data_length 比较：
 
-- 如果长度差不是 0 或者 32 两种情况，则判定为错误包，直接丢弃；
+- 如果长度差既不是 0 也不是 32，则判定为错误包，直接丢弃；
 - 如果长度差为 0，则整个 data 放入 MessagePacket 的 buffer，attachment 为空；
 - 否则将 data 切成两段：前面的 packet_length 字节放入 MessagePacket 的 buffer，后面的 32 字节当成 attachment 一起返回。
 

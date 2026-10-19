@@ -244,7 +244,7 @@ reply_rate_limit = 10
 allowlist_max_entries = 1000
 # NOOP immunity window: after a "NOOP" that cancels a forged "FIN!" the
 # record's last_noop_time is refreshed; a later "FIN?" within this
-# window is ignored (not marked offline, no "FIN!" reply), so a forged
+# window is answered with "FIN!" but does not mark offline, so a forged
 # "FIN?" flood cannot keep the victim offline (seconds, default: 2.0)
 noop_immunity_window = 2.0
 # server secret rotation: a new server secret is generated and put at

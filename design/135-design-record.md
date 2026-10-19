@@ -18,7 +18,7 @@ Record 属性：
 
 1. 其中 bid、key、socket 和 secret 均为**不变量**，记录一经创建永不改变（socket 与记录绑定后不可迁移至其他 socket，来源 socket 不匹配一律按冲突/伪造处理）；
 2. 每次收到有效数据包时都需要更新 last_time；
-3. 离线标志 offline 为客户端主动发送 "FIN?" 的标志；仅由 "ACK!" 幂等分支（重新握手走完第三次握手）或 "NOOP" 清除；"PING" 及数据包转发只更新 last_time，不改变 offline 标志；
+3. 离线标志 offline 由 "FIN?" 设置（`noop_immunity_window` 内不设置，见安全提案），由 "ACK!" 幂等分支（重新握手走完第三次握手）或 "NOOP" 清除；offline == true 期间仅 "SYN?"/"ACK!"/"FIN?"/"NOOP" 放行，其余指令（含 "PING"、数据包）一律静默丢弃，不更新 last_time；
 4. 通行证列表 allowlist 具体实现时建议采用以 bid 为索引的映射表： Map<int, Permit>，由 ACPT/DENY 指令维护；条目上限为 `allowlist_max_entries`（默认 1000 个）。
 
 
@@ -48,33 +48,42 @@ Record 属性：
 ```dart
     // 先在 A 的记录中查找属于 B 的通行证
     var permit = X.record.allowlist[Y];
-    if (permit != null) {
-        // 通行证已存在（此通行证必含对 B 的授权）
+    if (permit != null && permit.match(Y.record)) {
+        // 通行证已存在且目标未变（此通行证必含对 B 的授权）
         // 无需更新，直接返回
         return permit;
+    } else {
+        // 本地通行证不存在或已陈旧（目标 bid 换持有者/持有者换网）
+        // 清理陈旧条目后按下方流程处理
+        X.record.allowlist.remove(Y);
     }
     // 本地通行证不存在，则在 B 的记录中查找属于 A 的通行证
     permit = Y.record.allowlist[X];
-    if (permit != null) {
-        // 如果存在（通常是因为 B 先发起 ACPT）
+    if (permit == null) {
+        // 如果仍然不存在（正常情况下是因为 A 先发起 ACPT）
+        // 则新建一个属于 B 的通行证（含对 B 授权）
+        permit = Permit(Y.record);
+    } else if (permit.match(X.record)) {
+        // 如果存在（通常是因为 B 先发起 ACPT，此时已含对 A 的授权）
         // 则添加对 B 的授权
         permit.accept(Y.record);
         // （注意：此时 B 侧共享引用立即生效）
     } else {
-        // 如果仍然不存在（正常情况下是因为 A 先发起 ACPT）
-        // 则新建一个属于 B 的通行证（含对 B 授权）
+        // 陈旧通行证（发起方 bid 换持有者 / 持有者换网）
+        // 清理后重建
+        Y.record.allowlist.remove(X);
         permit = Permit(Y.record);
     }
     // 剩余空间检查
-    if (X.record.allowlist.length < allowlistMaxEntries) {
-        // 空间足够：将带对 B 授权的通行证写入 A 的记录表
-        X.record.allowlist[Y] = permit;
-        // 写入成功，返回此通行证
-        return permit;
+    if (X.record.allowlist.length >= allowlistMaxEntries) {
+        // A 的记录表空间不足，无法写入
+        // 返回 null 表示添加失败
+        return null;
     }
-    // A 的记录表空间不足，无法写入
-    // 返回 null 表示添加失败
-    return null;
+    // 空间足够：将带对 B 授权的通行证写入 A 的记录表
+    X.record.allowlist[Y] = permit;
+    // 写入成功，返回此通行证
+    return permit;
 ```
 
 一个通行证应该包含双方 socket 信息。

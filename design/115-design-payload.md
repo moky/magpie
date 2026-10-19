@@ -32,13 +32,9 @@
 
 ```json
 {
-    "sender"   : "moki@4WDfe3zZ4T7opFSi3iDAKiuTnUHjxmXekk",
-    "receiver" : "hulk@4YeVEN3aUnvC1DNUufCq1bs9zoBSJTzVEj",
-    "time"     : 1545405083,
+    "time": 1234567890.123,
     
-    "data"      : "9cjCKG99ULCCxbL2mkc/MgF1saeRqJaCc+S12+HCqmsuF7TWK61EwTQWZSKskUeF",
-    "key"       : "WH/wAcu+HfpaLq+vRblNnYufkyjTm4FgYyzW3wBDeRtXs1TeDmRxKVu7nQI/sdIALGLXrY+O5mlRfhU8f8TuIBilZUlX/eIUpL4uSDYKVLaRG9pOcrCHKevjUpId9x/8KBEiMIL5LB0Vo7sKrvrqosCnIgNfHbXMKvMzwcqZEU8=",
-    "signature" : "Yo+hchWsQlWHtc8iMGS7jpn/i9pOLNq0E3dTNsx80QdBboTLeKoJYAg/lI+kZL+g7oWJYpD4qKemOwzI+9pxdMuZmPycG+0/VM3HVSMcguEOqOH9SElp/fYVnm4aSjAJk2vBpARzMT0aRNp/jTFLawmMDuIlgWhBfXvH7bT7rDI="
+    "blahblah": "{填充长度 500 字节}"
 }
 ```
 
@@ -52,7 +48,7 @@
     "token":  "{Base64 编码的 token}",
     "token_time": {服务器生成此 token 的时间戳，整数秒},
 	
-    "time": 1234567890.123,
+    "time": 1234567890.125,
     
     "UDP": "12.34.56.78:90"
 }
@@ -69,7 +65,7 @@
     "token":  "{Base64 编码的 token}",
     "token_time": {服务器生成此 token 的时间戳，整数秒},
     
-    "time": 1234567890.123,
+    "time": 1234567890.127,
     
     "blahblah": "{填充长度 500 字节}"
 }

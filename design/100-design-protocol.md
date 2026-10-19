@@ -1,4 +1,4 @@
-# Magpie Bridge Messaging Protocol
+# Magpie Bridge Messaging Protocol （核心协议）
 
 本通信协议全称为 Magpie Bridge Messaging Protocol “鹊桥通信协议”，个别场合可简称 Magpie Protocol，缩写为 MP。
 
