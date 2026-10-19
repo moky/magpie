@@ -20,6 +20,7 @@ Record 属性：
 2. 每次收到有效数据包时都需要更新 last_time；
 3. 离线标志 offline 由 "FIN?" 设置（`noop_immunity_window` 内不设置，见安全提案），由 "ACK!" 幂等分支（重新握手走完第三次握手）或 "NOOP" 清除；offline == true 期间仅 "SYN?"/"ACK!"/"FIN?"/"NOOP" 放行，其余指令（含 "PING"、数据包）一律静默丢弃，不更新 last_time；
 4. 通行证列表 allowlist 具体实现时建议采用以 bid 为索引的映射表： Map<int, Permit>，由 ACPT/DENY 指令维护；条目上限为 `allowlist_max_entries`（默认 1000 个）。
+5. 内存记录总数设有上限 `max_records`（默认 20000，见服务器文档配置表）：新建 bid record 时若已达上限则回复 "FAIL" 指令包、不创建记录（"SYN?" 分配阶段提前检查、"ACK!" 创建前兜底检查；仅 loopback 内定流程豁免）；已存在的记录不受影响（复用/重握手正常）。
 
 
 ### 通行证
@@ -111,7 +112,7 @@ Record 属性：
 通行证为双向同意关系：单方 "DENY" 仅在发起方记录中删除映射，
 对方记录中的有效通行证仍在，通信不受影响（防伪造删除，见安全提案）；
 彻底解除需双方均 "DENY"；单方拒收（拉黑）由应用层处理。
-一方记录被回收后（Permit 自然也随其记录消失），服务器因取不到目标记录不再转发，关系自然失效。
+一方记录被回收后，引用其 bid 的通行证条目由 purge 一并清理（含对方记录中的残留条目），服务器因取不到目标记录不再转发，关系彻底失效。
 
 #### 清空通行证
 
@@ -141,12 +142,12 @@ Record 属性：
 
 所以服务器在检查 A 是否有权给 B 发送消息时，会先后在双方的 allowlist 中查找通行证，
 任何一边查到有效的通行证均会放行（防止一方被攻击者强行删掉通行证的情况，见安全提案）；
-命中后还需校验来源 socket 与本通行证匹配（Permit.match，防止 bid 回收重分配后误放行）。
+命中后还需校验来源与目标双方的 socket 均与本通行证匹配（Permit.match，双方均须为本通行证当事人；bid 回收重分配产生的残留条目因目标不匹配而拒绝）。
 
 ```dart
     permit = X.record.allowlist[Y];
     permit ??= Y.record.allowlist[X];
-    ok = permit != null && permit.valid && permit.match(X.record);
+    ok = permit != null && permit.valid && permit.match(X.record) && permit.match(Y.record);
 ```
 
 #### 附 1： Permit

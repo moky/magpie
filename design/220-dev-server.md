@@ -49,7 +49,8 @@
 	- 正常情况下，必须先完成握手才能转发数据，所以拿到转发任务时要先检查发送者状态：
 		- 先做来源检查（见架构设计文档）：连接未确认则先回复 "FAIL"（应答受共享计数器限频，见安全提案）再丢弃；source bid 不匹配则直接丢弃；
 		- 凡 bid record 已建立后收到的数据包，均须对**附加校验码**进行 HMAC-SHA256 校验（见安全提案），校验失败视为不可信来源直接丢弃、不应答；
-	- 来源校验通过之后，**更新活跃时间**```record.last_time = now```，然后检查目标状态（见架构设计文档）；
+	- 来源校验通过之后，若发送方记录 offline == true 则静默丢弃、不更新活跃时间（见架构设计文档）；
+	- 然后**更新活跃时间**```record.last_time = now```，并检查目标状态（见架构设计文档）；
 	- 以上校验全部通过之后，用接收方的 record.secret 重新对数据包进行签名（见安全提案），然后再执行转发操作。
 
 ## Bridge ID 管理
@@ -114,9 +115,9 @@ bid (32位无符号整数) 采用**全随机**方式生成：直接在 `0x000100
 由于 "SYN?" 阶段不创建任何记录，握手洪流不产生任何共享状态、不占用内存，
 防洪策略见安全提案。
 
-管理线程每轮循环先执行回收检查：若距上次调用已超过 `record_recycle_interval`（默认 10 分钟），调用 ```purge(now)``` 回收超过 expires 的记录（同时删除对应的 bid 和 socket 信息索引）；随后从管理请求队列取出下一个任务处理（队列为空时阻塞等待）。
+管理线程每轮循环先执行回收检查：若距上次调用已超过 `record_recycle_interval`（默认 10 分钟），调用 ```purge(now)``` 回收超过 expires 的记录（同时删除对应的 bid 和 socket 信息索引，并清理引用被回收 bid 的通行证条目，见用户信息记录文档）；随后从管理请求队列取出下一个任务处理（队列为空时阻塞等待）。
 
-```purge(now)``` 只负责回收超过 expires（默认 24 小时）的记录（```last_time < now - expires```），调用间隔默认 10 分钟，可通过配置文件 `record_recycle_interval` 调整；
+```purge(now)``` 负责回收超过 expires（默认 24 小时）的记录（```last_time < now - expires```），并清理引用被回收 bid 的通行证条目（对方记录中的残留 Permit，见用户信息记录文档；先遍历过期记录的 allowlist，按其中的 bid 反向定位对方记录，删除其中引用本 bid 的条目），调用间隔默认 10 分钟，可通过配置文件 `record_recycle_interval` 调整；
 正常运营时分配表规模为在线用户数（万级），一次遍历毫秒级，10 分钟一次的摊销成本可忽略。
 实现上建议先只读遍历收集过期记录、再统一删除，以缩短可能的持锁时间。
 
@@ -219,8 +220,12 @@ record_recycle_interval = 600.0
 # record has been inactive for longer than this (seconds, default:
 # 60.0 = 1 minute)
 record_active_timeout = 60.0
-# handshake flood guard: minimum payload length of the first
-# handshake packet "SYN?" (bytes, default: 512; keeps the "SYN!"
+# max in-memory bid records: new handshakes that would create a
+# record are rejected with FAIL once the count reaches this limit;
+# existing records are unaffected (default: 20000)
+max_records = 20000
+# handshake flood guard: minimum payload length of the handshake
+# packets "SYN?" and "ACK!" (bytes, default: 512; keeps the "SYN!"
 # reply smaller than the request to prevent amplification)
 handshake_min_payload = 512
 # unconfirmed reply buckets: number of shared reply counters for
@@ -286,6 +291,6 @@ forwarder_queue_size = 65536
 **规则说明**：
 
 1. 所有时间值均为**浮点数的秒**（如 0.1 秒），代码内部自行转换为毫秒等内部单位；
-2. 容量类参数均为整数：waiting_queue_size、manager_queue_size、forwarder_queue_size 为任务数（任务即数据包与来源 socket 信息的封装，见架构文档），allowlist_max_entries 为条目数，socket_buffer_length 为字节数；
+2. 容量类参数均为整数：waiting_queue_size、manager_queue_size、forwarder_queue_size 为任务数（任务即数据包与来源 socket 信息的封装，见架构文档），allowlist_max_entries、max_records 为条目数，socket_buffer_length 为字节数；
 3. 所有键缺失、段缺失或文件缺失时均回退到代码默认值（host 默认 0.0.0.0、port 默认 9527、forwarders 默认 8，与其余键行为一致）；
 4. 命令行 --config 指定的路径优先于默认路径；配置文件不存在时不报错，直接使用全部默认值。
