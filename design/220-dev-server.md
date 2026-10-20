@@ -90,6 +90,21 @@ bid (32位无符号整数) 采用**全随机**方式生成：直接在 `0x000100
 - **转发线程**在转发包通过来源 socket 预检后更新；
 - **预处理线程**只负责分拣、不查表、不更新。
 
+### 内存优化建议
+
+Record 与 SocketAddress 是按记录数量存在的热对象，实现时建议采用固定实例布局（Python 版使用 __slots__，Java 版无实例字典开销）以消除实例字典内存；Permit 已槽化为定长槽（见下），无持久对象实例（查询时的视图为临时对象、不入池）。
+
+记录主体采用**定长数据行**（bid 4 + ip 16 + port 2 + secret 32 + last_time 8 + offline 1 + last_noop_time 8 + v4cnt 2 + v6cnt 2 = 75 字节），字段按固定偏移读写（pack/unpack），避免每字段一个对象引用。
+
+allowlist 采用**单 buffer 定长槽**：
+
+- 块长派生自配置 `allowlist_max_entries`：`allowlist_max_entries × 11` 字节（IPv4 槽为基准，无头部）；首次 "ACPT" 时整块懒分配，随记录回收释放；
+- 每槽为**单向通行证**（Permit._t 的定长化；槽主即所属记录，其 socket **不入持久存储**、由所属记录提供）：bid(4) + 对方 ip + 对方 port(2) + valid(1)；IPv4 槽 11 字节（ip 存完整 32 位）、IPv6 槽 23 字节；查询时 searchPermit 返回**临时可写视图**（槽主 socket + 槽内快照 socket + valid，不入池），其 match 与概念层 Permit 一致：record.socket 为槽主或快照之一即匹配（对称判定，防 bid 重用）；视图**持槽引用**（buffer + 槽偏移），accept(record) 在 record 为槽主或快照之一（即 match(record)）时置槽内 valid=1 并同步写回——跨侧置位的落点即视图引用的原槽；insertPermit 则将视图当前状态（快照 socket + valid）拷入新槽；
+- IPv4 槽从块首正向存放（槽 i 位于 `i×11`），IPv6 槽从块尾向前存放（槽 j 位于 `块长 - v6cnt×23 + j×23`）；**两段段内均按 bid 升序**——查询共用同一套二分（段起点：v4 为 0、v6 为 `块长 - v6cnt×23`），仅插入/删除的 memmove 方向相反（v4 后续槽后移、v6 前部槽前移）；剩余空间 = `块长 - v4cnt×11 - v6cnt×23`，追加前须 ≥ 槽大小——IPv4 容量 = allowlist_max_entries，IPv6 容量 ≈ ⌊allowlist_max_entries×11/23⌋（约一半）；
+- 段内按 bid 有序：添加/删除用二分定位 + 块内移动（memmove，"ACPT"/"DENY" 低频，微秒级），查找用二分（O(log n)，热路径约 0.7 μs/次，相对哈希表 0.2 μs 可接受）；
+- **双向确认由跨侧置位实现**：后发 "ACPT" 一方在建立自己一侧槽的同时（后发方新槽 valid=1），将先发方侧对应槽 valid 置位（单方 "ACPT" 不置位、未生效）；"DENY" 只删自己侧槽；"DENY *" 清空直接置 v4cnt = v6cnt = 0；
+- **通配通行证**（"ACPT *" 触发 ```allowAll()```，见用户信息记录文档）固定写 IPv4 段槽 0，槽内容 {bid:1, ip:0.0.0.1, port:1, valid:1}，并置 v4cnt=1、v6cnt=0（清除全部定向授权）；isAllowAll() 判定 O(1)：`v4cnt ≥ 1 且槽 0 的 bid 字段 == 1`（match 恒真，无需校验其余字段）。bid=1 属内定保留区间（H=0）、ip=0.0.0.1 属 0.0.0.0/8 保留段，均不会与真实授权撞车。
+
 ### 分配与回收
 
 握手采用**无状态**方式：
@@ -222,8 +237,9 @@ record_recycle_interval = 600.0
 record_active_timeout = 60.0
 # max in-memory bid records: new handshakes that would create a
 # record are rejected with FAIL once the count reaches this limit;
-# existing records are unaffected (default: 20000)
-max_records = 20000
+# existing records are unaffected (default: 65536; one more than the
+# IPv4 port space 0..65535, so a single IPv4 host cannot fill it)
+max_records = 65536
 # handshake flood guard: minimum payload length of the handshake
 # packets "SYN?" and "ACK!" (bytes, default: 512; keeps the "SYN!"
 # reply smaller than the request to prevent amplification)
@@ -245,8 +261,10 @@ reply_rate_limit = 10
 # allowlist; an "ACPT" that would exceed this limit has the overflowing
 # entries skipped (the rest still apply) and is answered with "FAIL"
 # carrying the failed bid subset, bounding the memory a forged ACPT
-# flood can occupy (entries, default: 1000)
-allowlist_max_entries = 1000
+# flood can occupy (entries, default: 256; the allowlist buffer length
+# is derived as this value * 11 bytes on the IPv4 slot basis, and the
+# IPv6 capacity is about half, see the memory optimization section)
+allowlist_max_entries = 256
 # NOOP immunity window: after a "NOOP" that cancels a forged "FIN!" the
 # record's last_noop_time is refreshed; a later "FIN?" within this
 # window is answered with "FIN!" but does not mark offline, so a forged
