@@ -148,7 +148,7 @@ bid 与 socket 信息**一一对应**：一个 bid 任何时候只会成功分�
 | secret | 客户端密钥 |
 | last_time | 最后活跃时间 |
 | offline | 主动下线标志 |
-| allowlist | 通行证列表（Map<int, Permit>，上限 `allowlist_max_entries` 默认 1000） |
+| allowlist | 通行证列表（经封装接口访问，上限 `allowlist_max_entries` 默认 256；实现见服务器文档） |
 | last_noop_time | 最近一次 "NOOP" 时间（安全扩展属性） |
 
 **不变量**：
@@ -174,7 +174,7 @@ bid 为 32 位无符号整数，采用**全随机**方式生成：在 `0x0001000
 ### 6.3 分配与回收
 
 - 握手**无状态**："SYN?" 阶段只做分配决策并计算令牌 token，**不创建任何记录**；记录在 "ACK!" 验证通过后才创建（创建即已确认，secret 固定不变）；
-- **容量上限**：新建记录前须检查记录总数已达 `max_records`（默认 20000）——"SYN?" 分配阶段预检、"ACK!" 创建记录前终检（防 "SYN?"~"ACK!" 期间被占满），已达上限回复 "FAIL"；仅内定流程（loopback）豁免；已存在记录的复用/重握手不受影响；
+- **容量上限**：新建记录前须检查记录总数已达 `max_records`（默认 65536）——"SYN?" 分配阶段预检、"ACK!" 创建记录前终检（防 "SYN?"~"ACK!" 期间被占满），已达上限回复 "FAIL"；仅内定流程（loopback）豁免；已存在记录的复用/重握手不受影响；
 - 创建记录时同时建立 bid 与 socket 两个索引；
 - **purge 回收**：`last_time` 超过 `record_expires`（默认 24 小时）的记录由管理线程周期回收（`record_recycle_interval`，默认 10 分钟），同时删除两个索引，并清理所有引用被回收 bid 的通行证条目（对方记录中的残留条目，见 8 节）；实现上先只读遍历收集过期记录、再统一删除，缩短持锁时间；
 - **不做惰性回收**：按 bid/socket 查询分配表时不检查是否过期，记录存在即按有效处理；过期回收统一由 purge 完成。
@@ -254,7 +254,7 @@ ACPT 可携带多个 bid，按错误类型分类处理：
 
 ```dart
 // 先在 A 的记录中查找属于 B 的通行证
-var permit = X.record.allowlist[Y];
+var permit = X.record.searchPermit(Y);
 if (permit != null && permit.match(Y.record)) {
     // 通行证已存在且目标未变（此通行证必含对 B 的授权）
     // 无需更新，直接返回
@@ -262,10 +262,10 @@ if (permit != null && permit.match(Y.record)) {
 } else {
     // 本地通行证不存在或已陈旧（目标 bid 换持有者/持有者换网）
     // 清理陈旧条目后按下方流程处理
-    X.record.allowlist.remove(Y);
+    X.record.removePermit(Y);
 }
 // 本地通行证不存在，则在 B 的记录中查找属于 A 的通行证
-permit = Y.record.allowlist[X];
+permit = Y.record.searchPermit(X);
 if (permit == null) {
     // 如果仍然不存在（正常情况下是因为 A 先发起 ACPT）
     // 则新建一个属于 B 的通行证（含对 B 授权）
@@ -274,24 +274,23 @@ if (permit == null) {
     // 如果存在（通常是因为 B 先发起 ACPT，此时已含对 A 的授权）
     // 则添加对 B 的授权
     permit.accept(Y.record);
-    // （注意：此时 B 侧共享引用立即生效）
+    // （注意：此时 B 侧引用立即生效）
 } else {
     // 陈旧通行证（发起方 bid 换持有者 / 持有者换网）
     // 清理后重建
-    Y.record.allowlist.remove(X);
+    Y.record.removePermit(X);
     permit = Permit(Y.record);
 }
-// 剩余空间检查
-if (X.record.allowlist.length >= allowlistMaxEntries) {
+// 空间足够时写入 A 的记录表（空间不足由 insertPermit 返回 null 表示失败）
+if (X.record.insertPermit(Y, permit) == null) {
     // A 的记录表空间不足，无法写入
-    // 返回 null 表示添加失败
     return null;
 }
-// 空间足够：将带对 B 授权的通行证写入 A 的记录表
-X.record.allowlist[Y] = permit;
 // 写入成功，返回此通行证
 return permit;
 ```
+
+> 通行证访问一律经封装接口（`searchPermit`/`insertPermit`/`removePermit`/`clearPermits`/`allowAll`/`isAllowAll`），不直接读写 allowlist 字段；实现见服务器文档。
 
 全部处理完后：
 
@@ -305,36 +304,49 @@ return permit;
 服务器收到 "DENY" 时，先判断载荷是否为清空标记（见 8.3），命中则走清空流程；否则检查 bid 合法性：
 
 - **格式类错误**（负数、0、或等于发送者自身 bid）——整体拒绝，回复 "FAIL"（sources 回显格式非法的 bid 子集）；
-- 其余逐个在发起方记录中删除映射（`X.record.allowlist.remove(Y)`）；目标记录不存在也视为删除成功（幂等）。
+- 其余逐个在发起方记录中删除映射（`X.record.removePermit(Y)`）；目标记录不存在也视为删除成功（幂等）。
 
 全部处理完（无格式类错误）后回复 "DONE"（sources 回显**实际删除的 bid 列表**）。
 
 通行证为双向同意关系：
 
-- 单方 "DENY" 仅在**发起方**记录中删除映射（`X.record.allowlist.remove(Y)`），对方记录中的有效通行证仍在，通信不受影响（防伪造删除）；
+- 单方 "DENY" 仅在**发起方**记录中删除映射（`X.record.removePermit(Y)`），对方记录中的有效通行证仍在，通信不受影响（防伪造删除）；
 - 彻底解除需**双方均 "DENY"**；单方拒收（拉黑）由应用层处理；
 - 一方记录被回收后，引用其 bid 的通行证条目由 purge 一并清理（含对方记录中的残留条目），服务器因取不到目标记录不再转发，关系彻底失效。
 
-### 8.3 清空通行证
+### 8.3 清空通行证（"DENY *"）
 
 为状态重置（应用重启丢失列表、或被恶意打满时重建）设计特殊 DENY 载荷 `[-1, -2, -3]`（严格按序的 3 个有序负值，防客户端误操作）：
 
-- 服务器先判断 sources 是否恰好为 `[-1, -2, -3]`，命中则执行 `X.record.allowlist.clear()`；
-- 清空之前取出 bid 列表，在应答 "DONE" 中回显被清空的 bid 列表。
+- 服务器先判断 sources 是否恰好为 `[-1, -2, -3]`，命中则执行 `X.record.clearPermits()`（返回被清除的 bid 列表）；
+- 应答 "DONE" 回显被清空的 bid 列表。
 
-### 8.4 通行权检查
+### 8.4 通配授权（"ACPT *"）
 
-检查 A 是否有权给 B 发送时，**先后在双方 allowlist 中查找**，任一边查到有效即放行（防止一方被攻击者强行删掉通行证）；命中后还须校验**来源与目标双方的 socket 均与本通行证匹配**（双方均须为本通行证当事人）：
+与清空通行证对称，"ACPT" 携带同一标记 `[-1, -2, -3]`（严格按序）时为**通配授权**（允许所有，适用于对所有人开放服务的 bot 等场景）：
+
+- 通配授权为**原子操作**：执行 `X.record.allowAll()`（清空现有全部定向通行证并建立通配通行证），应答 "DONE" 回显被清除的定向 bid 列表；
+- 通配通行证对**任意 bid 有效**（match 恒真），无需校验 socket；
+- 通配生效期间定向 "ACPT"/"DENY" 一律回复 "FAIL"，须先 "DENY *" 退出通配；"DENY *" 连通用配一并清除；
+- 通配状态随记录回收/服务器重启失效。
+
+### 8.5 通行权检查
+
+检查 A 是否有权给 B 发送时，**先后在双方 allowlist 中查找**，任一边查到有效即放行（防止一方被攻击者强行删掉通行证）；命中后还须校验**来源与目标双方的 socket 均与本通行证匹配**（双方均须为本通行证当事人）；任一侧处于通配授权状态亦视为命中、直接放行：
 
 ```dart
-permit = X.record.allowlist[Y];
-permit ??= Y.record.allowlist[X];
+permit = X.record.searchPermit(Y);
+permit ??= Y.record.searchPermit(X);
 ok = permit != null && permit.valid && permit.match(X.record) && permit.match(Y.record);
+ok ||= X.record.isAllowAll();
+ok ||= Y.record.isAllowAll();
 ```
 
-> 双向匹配可拒绝 bid 回收重分配产生的残留条目：原关系对应的持有者已更换，目标 socket 不匹配即拒绝，残留条目不会导致误放行。
+> 双向匹配可拒绝 bid 回收重分配产生的残留条目：原关系对应的持有者已更换，目标 socket 不匹配即拒绝，残留条目不会导致误放行；通配放行不破坏该检测（通配对任意 bid 有效，本身即意图允许全部）。
 
-### 8.5 Permit 类
+> `searchPermit`/`removePermit` 可传对方地址族只查对应段（调用方均持有对方 record），未传则两段都查（如 "DENY" 时目标记录可能不存在）；传地址族还可避免跨段歧义：换地址族抢注时两段可能并存同 bid 槽，只查当前段不会命中陈旧槽（残留仍由双 match 兜底）。
+
+### 8.6 Permit 类
 
 ```dart
 class Permit {
@@ -349,17 +361,19 @@ class Permit {
 
     bool accept(Record record) {
         if (_s == record.socket) {
-            return true;
+            return true;         // 创建方确认（幂等，不改变生效状态）
         } else if (_t == null) {
-            _t = record.socket;
+            _t = record.socket;  // 首次接纳对方：记录对方 socket，生效
             return true;
         }
-        return _t == record.socket;
+        return _t == record.socket;   // 已有接纳方：仅其本人再次确认，第三方拒绝
     }
 }
 ```
 
-### 8.6 SocketAddress
+> 此为**概念层**共享对象模型。实现层槽化后（见 server.md 6.5）的对应关系：`_t` ↔ 槽内快照（bid 对应 socket）、`valid` ↔ 槽内 valid 位、"首次接纳/确认"由服务器**跨侧置位**完成——槽化后 `_t` 在插入时已确定（快照），故实现层视图的 accept 只需 `match` 命中即置位（仅在双方已确认的时点被调用）；概念层 accept 承担"引入接纳方"的职责，两者语义不同、不可混用。
+
+### 8.7 SocketAddress
 
 socket 信息以 `SocketAddress` 表示（记录中的 socket 属性、通行证中的 `_s/_t` 均为此类型）；作为 key 查询时为字符串形式 `"{ip}:{port}"`（IPv6 用 `[::1]:port` 包裹）。
 

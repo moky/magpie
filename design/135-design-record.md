@@ -27,12 +27,18 @@ Record 属性：
 
 Record 对通行证提供以下封装接口，外部一律通过接口访问（不得直接读写 allowlist 字段）：
 
-- `searchPermit(bid)`：按 bid 查找通行证，未命中返回 null；
+- `searchPermit(bid, addressFamily?)`：按 bid 查找通行证，未命中返回 null；传入对方地址族时只查对应段（调用方持有对方 record 时即可提供，见"通行权检查"），未传则两段都查；
 - `insertPermit(bid, permit)`：写入一条通行证，空间不足返回 null（见"添加通行证"）；
-- `removePermit(bid)`：删除一条通行证，不存在时幂等返回；
+- `removePermit(bid, addressFamily?)`：删除一条通行证，不存在时幂等返回；地址族传参与 `searchPermit` 相同（未传则两段都查）；
 - `clearPermits()`：清空全部通行证，返回被清除的 bid 列表（见"清空通行证"）；
 - `allowAll()`：进入通配授权状态（清空现有全部定向通行证并建立通配通行证），返回被清除的 bid 列表（见"通配授权"）；
 - `isAllowAll()`：是否处于通配授权状态。
+
+槽化实现下（见服务器文档），通行证槽按**对方 socket 的地址族**分存两段（IPv4 段/ IPv6 段）。`searchPermit`/`removePermit` 传入对方地址族则只查对应段，未传则两段都查：
+
+- 通行权检查与添加流程均先经分配表取得对方 record（添加流程对不存在的 bid 按状态类错误跳过），对方 socket 地址族已知，可只查对应段；
+- "DENY" 时目标记录可能不存在（幂等视为删除成功），地址族未知，须两段都查；
+- 传地址族还消除跨段歧义：原持有者以 IPv4 留下残留槽、新持有者换 IPv6 抢注同一 bid 时，两段可能并存同 bid 槽——只查当前持有者地址族对应段不会命中陈旧槽（残留仍由双 socket 匹配兜底拒绝）。
 
 当客户端 A 准备 ACPT 多个 bid 时，先逐个查询 bid record 分配表，按错误类型分类处理：
 
@@ -162,7 +168,7 @@ Record 对通行证提供以下封装接口，外部一律通过接口访问（�
 #### 通行权检查
 
 通行证一旦双方都确认之后就生效，如果只有一方发 DENY 另一方不发，
-也只是在 X.record.allowlist 中删除，而 Y.record.allowlist 中仍然存在，
+也只是删除 X.record 中对应 Y 的条目，而 Y.record 中对应 X 的条目仍然存在，
 
 所以服务器在检查 A 是否有权给 B 发送消息时，会先后在双方的 allowlist 中查找通行证，
 任何一边查到有效的通行证均会放行（防止一方被攻击者强行删掉通行证的情况，见安全提案）；
@@ -195,15 +201,17 @@ class Permit {
     
     bool accept(Record record) {
         if (_s == record.socket) {
-            return true;
+            return true;         // 创建方确认（幂等，不改变生效状态）
         } else if (_t == null) {
-            _t = record.socket;
+            _t = record.socket;  // 首次接纳对方：记录对方 socket，生效
             return true;
         }
-        return _t == record.socket;
+        return _t == record.socket;   // 已有接纳方：仅其本人再次确认，第三方拒绝
     }
 }
 ```
+
+> 概念层共享对象模型；实现层槽化后（见 220 服务器设计的"内存优化建议"）"首次接纳/确认"由跨侧置位完成，_t 对应槽内快照、valid 对应槽内 valid 位——概念层 accept 承担引入接纳方的职责，与实现层视图 accept（match 命中即置位）语义不同，不可混用。
 
 #### 附 2： SocketAddress
 

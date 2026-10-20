@@ -115,7 +115,8 @@ class MessagePacket implements Magpie {
 1. 第一次握手时可填 source 作为预订 bid（可选）；预订失败（被占用/非法/服务器已满）时服务器回复 "FAIL"，由客户端决定重新申请或放弃；
 2. 除 "DATA" 外（payload 需承载文件数据），其余指令包均可携带可选参数 request/response 作为载荷附加信息；
 3. 系统指令载荷为 JSON 字符串（须含发送方时间戳 "time"），所有指令（含应答）均须携带发送方当前时间戳（秒），不允许为空；
-4. DirectPacket 无 acpt/deny/fail/done 工厂（这些指令只与服务器通信）。
+4. 通配授权（"ACPT *"）与清空通行证（"DENY *"）通过 acpt/deny 的 request 载荷传入通配标记 [-1, -2, -3]（严格按序）实现，工厂方法本身不变（见协议文档 6.2）；
+5. DirectPacket 无 acpt/deny/fail/done 工厂（这些指令只与服务器通信）。
 
 ### 3.1 BridgePacket 要点（Dart 示例）
 

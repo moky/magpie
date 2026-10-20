@@ -51,7 +51,7 @@
 3. **离线分流**：记录 offline == true → 静默丢弃（不更新 last_time）；
 4. 以上检查全部通过后更新 last_time；
 5. **目标检查**：target bid 记录不存在 → 伪造包，静默丢弃；
-6. **通行证检查**：发送方是否有权向 target 发送（双向查找，见架构文档 8.4），不满足 → 静默丢弃（不暴露收件人存在状态）；
+6. **通行证检查**：发送方是否有权向 target 发送（双向查找 + 通配放行，见架构文档 8.5），不满足 → 静默丢弃（不暴露收件人存在状态）；
 7. **目标状态**：target 记录 offline 或 `last_time` 超 `T_active`（60s）→ 回复 "FAIL"（src-command + src-target + time）通知发送方；
 8. **转发**：用接收方的 secret 重新签名（替换校验码），原样发给 target socket。
 
@@ -152,6 +152,96 @@ void purge(DateTime now) {
 - 映射表为空 → 切换为非加密模式（基础握手）；
 - 读取失败/文件消失 → **保留旧表继续运行**（不降级、不中断）。
 
+### 6.5 通行证内存布局（实现）
+
+Record 与 SocketAddress 是按记录数量存在的热对象，实现时建议采用固定实例布局（Python 版用 `__slots__`，Java 版无实例字典开销）；Permit 已槽化为定长槽，**无持久对象实例**（查询时的视图为临时对象、不入池）。
+
+记录主体采用**定长数据行**：bid(4) + ip(16) + port(2) + secret(32) + last_time(8) + offline(1) + last_noop_time(8) + v4cnt(2) + v6cnt(2) = **75 字节**，字段按固定偏移 pack/unpack 读写，避免每字段一个对象引用。
+
+allowlist 采用**单 buffer 定长槽**（无头部）：
+
+- 块长派生自配置：`allowlist_max_entries × 11` 字节（IPv4 槽为基准）；首次 "ACPT" 整块懒分配，随记录回收释放；
+- 每槽为**单向通行证**（Permit._t 的定长化；槽主即所属记录，其 socket 不入持久存储、由所属记录提供）：bid(4) + 对方 ip + 对方 port(2) + valid(1)；IPv4 槽 11 字节（ip 存完整 32 位）、IPv6 槽 23 字节；
+- `searchPermit(bid)` 返回**临时可写视图**（槽主 socket + 槽内快照 socket + valid，不入池）：match 与概念层 Permit 一致（record.socket 为槽主或快照之一即匹配，对称判定防 bid 重用）；视图**持槽引用**（buffer + 槽偏移），`accept(record)` 在 match 命中时置槽内 valid=1 并同步写回（跨侧置位的落点即视图引用的原槽）；`insertPermit` 把视图当前状态拷入新槽；
+- 布局：IPv4 槽从块首正向存放（槽 i 位于 `i×11`），IPv6 槽从块尾向前存放（槽 j 位于 `块长 − v6cnt×23 + j×23`）；**两段段内均按 bid 升序**——查询共用同一套二分（段起点：v4 为 0、v6 为 `块长 − v6cnt×23`），仅插入/删除的 memmove 方向相反（v4 后续槽后移、v6 前部槽前移）；剩余空间 = `块长 − v4cnt×11 − v6cnt×23`，追加前须 ≥ 槽大小——IPv4 容量 = `allowlist_max_entries`，IPv6 容量 ≈ ⌊`allowlist_max_entries×11/23`⌋（约一半）；
+- **双向确认由跨侧置位实现**：后发 "ACPT" 一方建立自己侧槽的同时（新槽 valid=1），将先发方侧对应槽 valid 置位（单方 "ACPT" 不置位、未生效）；"DENY" 只删自己侧槽；"DENY *" 清空直接置 v4cnt = v6cnt = 0；
+- **通配通行证**（"ACPT *" 触发 `allowAll()`）固定写 IPv4 段槽 0，槽内容 {bid:1, ip:0.0.0.1, port:1, valid:1}，并置 v4cnt=1、v6cnt=0（清除全部定向授权）；`isAllowAll()` 判定 O(1)：`v4cnt ≥ 1 且槽 0 的 bid 字段 == 1`（match 恒真）。bid=1 属内定保留区间（H=0）、ip=0.0.0.1 属 0.0.0.0/8 保留段，均不会与真实授权撞车。
+
+#### 视图与接口实现（代码形态）
+
+槽化后没有持久 Permit 对象：`searchPermit` 返回**临时可写视图**（持槽引用，不入池）。
+
+```dart
+/// 槽 = { bid, 对方 ip, 对方 port, valid }
+///   槽主 = 所属 record（自己的 socket，不入槽，由记录提供）
+///   IPv4 槽 11 B：bid(4) ip(4) port(2) valid(1)，块首正向，槽 i @ i×11
+///   IPv6 槽 23 B：bid(4) ip(16) port(2) valid(1)，块尾反向，槽 j @ 块长 − v6cnt×23 + j×23
+///   段内均按 bid 升序；剩余空间 = 块长 − v4cnt×11 − v6cnt×23
+class PermitView {                     // 临时可写视图，不入池
+    final Record owner;                // 槽主（所属记录）
+    final int bid;                     // 对方 bid（槽内）
+    final SocketAddress peer;          // 对方 socket（槽内快照）
+    final Uint8List buffer;            // 所属记录的 allowlist buffer（槽引用）
+    final int offset;                  // 槽偏移
+    bool valid;                        // 槽内 valid 位（accept 后写回）
+
+    bool match(Record record) =>
+        owner.socket == record.socket || peer == record.socket;
+
+    bool accept(Record record) {
+        if (!match(record)) return false;   // 非当事人，拒绝
+        valid = true;
+        buffer[offset + VALID_OFFSET] = 1;  // 置位并同步写回槽内
+        return true;
+    }
+}
+```
+
+接口实现（Record 上，外部经此访问 allowlist）：
+
+```dart
+PermitView? searchPermit(int bid, [int? addressFamily]) {
+    // 段内二分（v4 段起点 0、v6 段起点 块长 − v6cnt×23，段内 bid 升序）
+    // 传 addressFamily 只查对应段（调用方持有对方 record 时，见用户信息记录文档）；未传则两段都查
+    // 命中 → 视图（owner/bid/peer/valid）；未命中 → null
+}
+
+bool insertPermit(int bid, PermitView permit) {
+    // 剩余空间 = 块长 − v4cnt×11 − v6cnt×23；< 槽大小 → false
+    // 段内二分定位插入点，memmove（v4 后续槽后移 / v6 前部槽前移）
+    // 写入 {bid, peer.ip, peer.port, permit.valid}；v4cnt++ / v6cnt++
+}
+
+void removePermit(int bid, [int? addressFamily]) {
+    // 二分定位（addressFamily 传参同 searchPermit），memmove 覆盖删除；v4cnt-- / v6cnt--；不存在幂等
+}
+
+List<int> clearPermits() {
+    // 收集全部槽 bid → v4cnt = v6cnt = 0 → 返回列表
+}
+
+List<int> allowAll() {
+    // 收集全部定向槽 bid → v4cnt = v6cnt = 0
+    // 槽 0 写 {bid:1, ip:0.0.0.1, port:1, valid:1}，v4cnt = 1
+    // 返回被清除的 bid 列表
+}
+
+bool isAllowAll() => v4cnt >= 1 && 槽 0 的 bid == 1;
+```
+
+**双向确认（跨侧置位）**——视图 accept 的唯一合法调用场景：
+
+```dart
+// B 后发 "ACPT" A（A 先 ACPT 过 B）：
+// 1) B 侧建新槽（后发方新槽 valid=1）
+B.record.insertPermit(X, view(B.record, X, A.socket, valid: true));
+// 2) A 侧已有槽 {bid:Y, peer:B.socket, valid:0} 跨侧置位
+AView = A.record.searchPermit(Y);
+AView.accept(A.record);   // 槽主 A 命中 → valid=1 写回（或 accept(B.record)，快照命中亦可）
+```
+
+> 视图 accept 只在**跨侧置位**时调用（此时双方均已确认）；单方 "ACPT"（A 先 ACPT B）流程只调 `insertPermit` 建槽（valid=0）、**不调 accept**——permit 未生效。若对单方槽误调 accept(槽主) 会单方生效，实现时须由服务器流程保证调用时机。
+
 ---
 
 ## 7. 密钥轮换
@@ -190,11 +280,11 @@ void purge(DateTime now) {
 | record_expires | 86400.0 | 记录过期时间（秒，24h） |
 | record_recycle_interval | 600.0 | purge 最小调用间隔（秒，10 分钟；purge 只回收超 record_expires 的记录，全表扫描罕见且廉价） |
 | record_active_timeout | 60.0 | 在线判定窗口 T_active（秒，1 分钟） |
-| max_records | 20000 | 内存记录总数上限（新建握手将创建记录时已达上限回 "FAIL"，仅内定流程豁免；已存在记录不受影响） |
+| max_records | 65536 | 内存记录总数上限（比 IPv4 端口空间多 1，单台 IPv4 主机打不满；新建握手将创建记录时已达上限回 "FAIL"，仅内定流程豁免；已存在记录不受影响） |
 | handshake_min_payload | 512 | 握手上行包最小载荷（防放大；"SYN!" 应答小于请求） |
 | unconfirmed_reply_buckets | 1024 | 共享计数器分桶数（按 hash("ip:port") % U 定位） |
 | reply_rate_limit | 10 | 未确认来源 "FAIL" 限频（次/秒/桶） |
-| allowlist_max_entries | 1000 | 通行证列表上限（条目数；超限条目跳过、回显失败子集） |
+| allowlist_max_entries | 256 | 通行证列表上限（条目数；buffer 长度 = 值 × 11 字节，IPv6 容量约一半；超限条目跳过、回显失败子集） |
 | noop_immunity_window | 2.0 | "NOOP" 免疫窗口（秒；窗口内 "FIN?" 应答但不标记 offline） |
 | server_secret_rotate_interval | 600.0 | 服务器密钥轮换周期（秒，保留最近 2 把） |
 | app_secret_file | （空） | 应用密钥文件路径（示例：`# app_secret_file = /etc/magpie/private/enigma.json`） |
@@ -230,19 +320,19 @@ forward_window = 0.1
 record_expires = 86400.0
 record_recycle_interval = 600.0
 record_active_timeout = 60.0
-max_records = 20000
+max_records = 65536
 
 # security
 handshake_min_payload = 512
 unconfirmed_reply_buckets = 1024
 reply_rate_limit = 10
-allowlist_max_entries = 1000
+allowlist_max_entries = 256
 noop_immunity_window = 2.0
 server_secret_rotate_interval = 600.0
 handshake_token_timeout = 60.0
 bid_allocation_retries = 16
 
-# app secret (enigma); 未配置/文件缺失/enigmas 为空 → 非加密模式
+# app secret (enigma); unset/empty/missing/unparsable/empty enigmas -> non-encrypted mode
 # app_secret_file = /etc/magpie/private/enigma.json
 app_secret_file =
 app_secret_reload_interval = 600.0

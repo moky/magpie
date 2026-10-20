@@ -137,7 +137,7 @@ bool ok = (packet is ReliablePacket) && packet.verify(record.secret);
 ### 1. 恶意修改通行证
 
 攻击者可以伪装成受害者 A 向服务器发送 ACPT/DENY 指令，
-服务器在验证通过后会将 A.record.allowlist 按照指令要求进行修改，然后向受害者发送 DONE/FAIL。
+服务器在验证通过后按指令要求修改 A 的通行证列表（经封装接口，见用户信息记录文档），然后向受害者发送 DONE/FAIL。
 
 - 伪造 "DENY" 仅删除 A 侧映射；通行证为双向共享对象（见用户信息记录文档），
   对方记录中的有效通行证仍在，转发检查"任一边有效且双方匹配即放行"，故单方删除不影响通信；

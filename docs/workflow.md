@@ -126,14 +126,14 @@ sequenceDiagram
 
     Note over A,B: 单向添加（A → B）
     A->>S: "ACPT"（sources: [Y]，带校验码）
-    S->>S: 查 X.record.allowlist[Y] → 无；查 Y.record.allowlist[X] → 无
-    S->>S: 新建 Permit(Y)（_s = Y.socket）→ 写入 X.record.allowlist[Y]
+    S->>S: 查 X.record.searchPermit(Y) → 无；查 Y.record.searchPermit(X) → 无
+    S->>S: 新建 Permit(Y)（_s = Y.socket）→ X.record.insertPermit(Y, permit)
     S-->>A: "DONE"（回显实际写入：src-command + sources）
 
     Note over A,B: 反向添加（B → A）后通行证生效
     B->>S: "ACPT"（sources: [X]）
-    S->>S: 查 Y.record.allowlist[X] → 无；查 X.record.allowlist[Y] → 有（_s = Y.socket）
-    S->>S: accept(A)（_t = A.socket）→ 写入 Y.record.allowlist[X]
+    S->>S: 查 Y.record.searchPermit(X) → 无；查 X.record.searchPermit(Y) → 有（_s = Y.socket）
+    S->>S: accept(A)（_t = A.socket）→ Y.record.insertPermit(X, permit)
     S-->>B: "DONE"（回显实际写入）
 
     Note over A,B: 同一 Permit 被双方引用，双方确认后 valid = true
@@ -152,7 +152,7 @@ sequenceDiagram
     participant B as 客户端 B（bid Y）
 
     A->>S: "DENY"（sources: [Y]）
-    S->>S: 从 X.record.allowlist 移除 Y（B 侧记录中的通行证仍有效）
+    S->>S: X.record.removePermit(Y)（B 侧记录中的通行证仍有效）
     S-->>A: "DONE"
     Note over A,B: 单向 DENY 只影响自己侧，通信不中断（双向查找放行）
 ```
@@ -169,14 +169,33 @@ sequenceDiagram
 { "sources": [-1, -2, -3], "time": 1234567890 }
 ```
 
-- 服务器识别到严格有序的 `[-1, -2, -3]` 标记 → 清空该记录的 allowlist；
+- 服务器识别到严格有序的 `[-1, -2, -3]` 标记 → 执行 `clearPermits()` 清空该记录的通行证；
 - 应答 "DONE" 回显被清空的 bid 列表（实际清除的条目）；
 - 清空后应用需用 ACPT 重建好友关系。
 
-### 4.4 限制
+### 4.4 通配授权（"ACPT *"）
 
-- allowlist 上限 `allowlist_max_entries`（默认 1000），ACPT 中超限条目跳过并回显失败子集（其余照常生效），防内存攻击；
-- 通行证检查（发送方记录 + 接收方记录双向查找，任一边有效且来源与目标双方的 socket 均匹配即放行）与完整删除/失败流程详见架构文档。
+允许所有（适用于对所有人开放服务的 bot 等场景）：与清空共用同一标记 `[-1, -2, -3]`（严格按序），执行 `allowAll()` 原子清空现有定向通行证并建立通配通行证：
+
+```mermaid
+sequenceDiagram
+    participant B as Bot（bid X）
+    participant S as 服务器
+
+    B->>S: "ACPT"（sources: [-1, -2, -3]）
+    S->>S: 原子：清空定向通行证 + 建立通配通行证
+    S-->>B: "DONE"（回显被清除的定向 bid 列表）
+    Note over B: 此后任意用户均可向 B 发数据（通行权检查见架构文档 8.5）
+```
+
+- 通配通行证对任意 bid 有效（match 恒真），无需双方 ACPT；
+- **通配生效期间定向 "ACPT"/"DENY" 一律回复 "FAIL"**，须先 "DENY *" 退出通配；
+- "DENY *" 连通用配一并清除；通配状态随记录回收/服务器重启失效。
+
+### 4.5 限制
+
+- allowlist 上限 `allowlist_max_entries`（默认 256），ACPT 中超限条目跳过并回显失败子集（其余照常生效），防内存攻击；
+- 通行证检查（发送方记录 + 接收方记录双向查找，任一边有效且来源与目标双方的 socket 均匹配即放行，或任一侧通配放行）与完整删除/失败流程详见架构文档。
 
 ---
 

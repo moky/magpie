@@ -105,6 +105,81 @@ allowlist 采用**单 buffer 定长槽**：
 - **双向确认由跨侧置位实现**：后发 "ACPT" 一方在建立自己一侧槽的同时（后发方新槽 valid=1），将先发方侧对应槽 valid 置位（单方 "ACPT" 不置位、未生效）；"DENY" 只删自己侧槽；"DENY *" 清空直接置 v4cnt = v6cnt = 0；
 - **通配通行证**（"ACPT *" 触发 ```allowAll()```，见用户信息记录文档）固定写 IPv4 段槽 0，槽内容 {bid:1, ip:0.0.0.1, port:1, valid:1}，并置 v4cnt=1、v6cnt=0（清除全部定向授权）；isAllowAll() 判定 O(1)：`v4cnt ≥ 1 且槽 0 的 bid 字段 == 1`（match 恒真，无需校验其余字段）。bid=1 属内定保留区间（H=0）、ip=0.0.0.1 属 0.0.0.0/8 保留段，均不会与真实授权撞车。
 
+#### 视图与接口实现（代码形态）
+
+槽化后没有持久 Permit 对象：searchPermit 返回**临时可写视图**（持槽引用，不入池）。
+
+```dart
+/// 槽 = { bid, 对方 ip, 对方 port, valid }
+///   槽主 = 所属 record（自己的 socket，不入槽，由记录提供）
+///   IPv4 槽 11 B：bid(4) ip(4) port(2) valid(1)，块首正向，槽 i @ i×11
+///   IPv6 槽 23 B：bid(4) ip(16) port(2) valid(1)，块尾反向，槽 j @ 块长 − v6cnt×23 + j×23
+///   段内均按 bid 升序；剩余空间 = 块长 − v4cnt×11 − v6cnt×23
+class PermitView {                     // 临时可写视图，不入池
+    final Record owner;                // 槽主（所属记录）
+    final int bid;                     // 对方 bid（槽内）
+    final SocketAddress peer;          // 对方 socket（槽内快照）
+    final Uint8List buffer;            // 所属记录的 allowlist buffer（槽引用）
+    final int offset;                  // 槽偏移
+    bool valid;                        // 槽内 valid 位（accept 后写回）
+
+    bool match(Record record) =>
+        owner.socket == record.socket || peer == record.socket;
+
+    bool accept(Record record) {
+        if (!match(record)) return false;   // 非当事人，拒绝
+        valid = true;
+        buffer[offset + VALID_OFFSET] = 1;  // 置位并同步写回槽内
+        return true;
+    }
+}
+```
+
+接口实现（Record 上，外部经此访问 allowlist）：
+
+```dart
+PermitView? searchPermit(int bid, [int? addressFamily]) {
+    // 段内二分（v4 段起点 0、v6 段起点 块长 − v6cnt×23，段内 bid 升序）
+    // 传 addressFamily 只查对应段（调用方持有对方 record 时，见用户信息记录文档）；未传则两段都查
+    // 命中 → 视图（owner/bid/peer/valid）；未命中 → null
+}
+
+bool insertPermit(int bid, PermitView permit) {
+    // 剩余空间 = 块长 − v4cnt×11 − v6cnt×23；< 槽大小 → false
+    // 段内二分定位插入点，memmove（v4 后续槽后移 / v6 前部槽前移）
+    // 写入 {bid, peer.ip, peer.port, permit.valid}；v4cnt++ / v6cnt++
+}
+
+void removePermit(int bid, [int? addressFamily]) {
+    // 二分定位（addressFamily 传参同 searchPermit），memmove 覆盖删除；v4cnt-- / v6cnt--；不存在幂等
+}
+
+List<int> clearPermits() {
+    // 收集全部槽 bid → v4cnt = v6cnt = 0 → 返回列表
+}
+
+List<int> allowAll() {
+    // 收集全部定向槽 bid → v4cnt = v6cnt = 0
+    // 槽 0 写 {bid:1, ip:0.0.0.1, port:1, valid:1}，v4cnt = 1
+    // 返回被清除的 bid 列表
+}
+
+bool isAllowAll() => v4cnt >= 1 && 槽 0 的 bid == 1;
+```
+
+**双向确认（跨侧置位）**——视图 accept 的唯一合法调用场景：
+
+```dart
+// B 后发 "ACPT" A（A 先 ACPT 过 B）：
+// 1) B 侧建新槽（后发方新槽 valid=1）
+B.record.insertPermit(X, view(B.record, X, A.socket, valid: true));
+// 2) A 侧已有槽 {bid:Y, peer:B.socket, valid:0} 跨侧置位
+AView = A.record.searchPermit(Y);
+AView.accept(A.record);   // 槽主 A 命中 → valid=1 写回（或 accept(B.record)，快照命中亦可）
+```
+
+> 视图 accept 只在**跨侧置位**时调用（此时双方均已确认）；单方 "ACPT"（A 先 ACPT B）流程只调 `insertPermit` 建槽（valid=0）、**不调 accept**——permit 未生效。若对单方槽误调 accept(槽主) 会单方生效，实现时须由服务器流程保证调用时机。
+
 ### 分配与回收
 
 握手采用**无状态**方式：
