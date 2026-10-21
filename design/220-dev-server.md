@@ -92,44 +92,103 @@ bid (32位无符号整数) 采用**全随机**方式生成：直接在 `0x000100
 
 ### 内存优化建议
 
-Record 与 SocketAddress 是按记录数量存在的热对象，实现时建议采用固定实例布局（Python 版使用 __slots__，Java 版无实例字典开销）以消除实例字典内存；Permit 已槽化为定长槽（见下），无持久对象实例（查询时的视图为临时对象、不入池）。
+Record 与 SocketAddress 是按记录数量存在的热对象，实现时建议采用固定实例布局（Python 版使用 __slots__，Java 版无实例字典开销）以消除实例字典内存；Permit 已槽化为定长槽（见下），无持久对象实例。
 
-记录主体采用**定长数据行**（bid 4 + ip 16 + port 2 + secret 32 + last_time 8 + offline 1 + last_noop_time 8 + v4cnt 2 + v6cnt 2 = 75 字节），字段按固定偏移读写（pack/unpack），避免每字段一个对象引用。
+记录主体采用**单 buffer 定长行**（创建记录时一次分配，随记录回收整体释放）：头部 secret 32 + bid 4 + hash31 4 + ip 16 + port 2 + 保留 1 + offline 1 + last_time 8 + last_noop_time 8 + 保留 2 + cnt 2 = 80 字节（hash31 为自己 socket 的 31 位身份哈希缓存，供通行证匹配复用，见下；`-` 为保留/未定义字节，共 3 B，字节对齐填充），后随槽区（见下）合并存放；**头部字段与槽区 bid/value 均按大端（网络字节序）存储，与协议字段一致**；字段按固定偏移读写（pack/unpack），避免每字段一个对象引用。
 
-allowlist 采用**单 buffer 定长槽**：
+allowlist 槽区与头部共用**单 buffer 定长槽**：
 
-- 块长派生自配置 `allowlist_max_entries`：`allowlist_max_entries × 11` 字节（IPv4 槽为基准，无头部）；首次 "ACPT" 时整块懒分配，随记录回收释放；
-- 每槽为**单向通行证**（Permit._t 的定长化；槽主即所属记录，其 socket **不入持久存储**、由所属记录提供）：bid(4) + 对方 ip + 对方 port(2) + valid(1)；IPv4 槽 11 字节（ip 存完整 32 位）、IPv6 槽 23 字节；查询时 searchPermit 返回**临时可写视图**（槽主 socket + 槽内快照 socket + valid，不入池），其 match 与概念层 Permit 一致：record.socket 为槽主或快照之一即匹配（对称判定，防 bid 重用）；视图**持槽引用**（buffer + 槽偏移），accept(record) 在 record 为槽主或快照之一（即 match(record)）时置槽内 valid=1 并同步写回——跨侧置位的落点即视图引用的原槽；insertPermit 则将视图当前状态（快照 socket + valid）拷入新槽；
-- IPv4 槽从块首正向存放（槽 i 位于 `i×11`），IPv6 槽从块尾向前存放（槽 j 位于 `块长 - v6cnt×23 + j×23`）；**两段段内均按 bid 升序**——查询共用同一套二分（段起点：v4 为 0、v6 为 `块长 - v6cnt×23`），仅插入/删除的 memmove 方向相反（v4 后续槽后移、v6 前部槽前移）；剩余空间 = `块长 - v4cnt×11 - v6cnt×23`，追加前须 ≥ 槽大小——IPv4 容量 = allowlist_max_entries，IPv6 容量 ≈ ⌊allowlist_max_entries×11/23⌋（约一半）；
-- 段内按 bid 有序：添加/删除用二分定位 + 块内移动（memmove，"ACPT"/"DENY" 低频，微秒级），查找用二分（O(log n)，热路径约 0.7 μs/次，相对哈希表 0.2 μs 可接受）；
-- **双向确认由跨侧置位实现**：后发 "ACPT" 一方在建立自己一侧槽的同时（后发方新槽 valid=1），将先发方侧对应槽 valid 置位（单方 "ACPT" 不置位、未生效）；"DENY" 只删自己侧槽；"DENY *" 清空直接置 v4cnt = v6cnt = 0；
-- **通配通行证**（"ACPT *" 触发 ```allowAll()```，见用户信息记录文档）固定写 IPv4 段槽 0，槽内容 {bid:1, ip:0.0.0.1, port:1, valid:1}，并置 v4cnt=1、v6cnt=0（清除全部定向授权）；isAllowAll() 判定 O(1)：`v4cnt ≥ 1 且槽 0 的 bid 字段 == 1`（match 恒真，无需校验其余字段）。bid=1 属内定保留区间（H=0）、ip=0.0.0.1 属 0.0.0.0/8 保留段，均不会与真实授权撞车。
+- 槽区长度派生自配置 `allowlist_max_entries`：`allowlist_max_entries × 8` 字节（槽 {bid 4, value 4} 统一 8B，IPv4/IPv6 同格式，无头部）；槽区随记录创建一次分配（与头部合并为同一 buffer），随记录回收整体释放；
+- 每槽为**单向通行证**（Permit._t 的定长化；槽主即所属记录，其 socket **不入持久存储**、由所属记录提供）：bid(4) + value(4)；value = 31 位哈希 | valid：
+  - 身份哈希 `hash31(socket) = SHA-256(socket) 截 32 位 & 0xFFFFFFFE`（高 31 位，bit0 恒 0）；写槽 `value = hash31 | valid`，valid 为 bit0（0 = 未确认、1 = 已确认）；
+  - 读身份（比较）：槽值 & 0xFFFFFFFE 与 record.hash31 比较；读 valid：槽值 & 1；跨侧置位：槽值 |= 1；
+  - 查询返回**临时可写视图**（槽主 socket + 槽内哈希 + valid，不入池），其 match：record.socket 为槽主（完整 socket 精确比较）或 record.hash31 与槽内哈希相等（31 位比较，防 bid 重用）；视图**持槽引用**（buffer + 槽偏移），accept(record) 在 match(record) 时置槽内 valid=1 并同步写回——跨侧置位的落点即视图引用的原槽；insertPermit 则将视图当前状态（哈希 + valid）拷入新槽；
+- 槽整体从头部之后正向按 bid 升序存放（槽 i 位于 `80 + i×8`），查询/插入/删除共用同一套二分 + memmove；剩余空间 = `槽区长度 − cnt×8`，追加前须 ≥ 8——容量 = allowlist_max_entries；
+- 残余风险：match 基于 31 位哈希快照，同一 bid 新旧持有者定向碰撞概率 2^-31（静默误放行仅理论存在；owner 侧仍为完整 socket 精确比较）；
+- **双向确认由跨侧置位实现**：后发 "ACPT" 一方在建立自己一侧槽的同时（后发方新槽 valid=1），将先发方侧对应槽 valid 置位（单方 "ACPT" 不置位、未生效）；"DENY" 只删自己侧槽；"DENY *" 清空直接置 cnt = 0；
+- **通配通行证**（"ACPT *" 触发 ```allowAll()```，见用户信息记录文档）固定写槽 0，槽内容 {bid:1, value:固定值}（match 恒真，value 无实际用途），并置 cnt=1（清除全部定向授权）；isAllowAll() 判定 O(1)：`cnt ≥ 1 且槽 0 的 bid 字段 == 1`。bid=1 属内定保留区间（H=0），不会与真实授权撞车。
+
+#### Record buffer 内存分配格式
+
+记录头部字段顺序可按需调整（按固定偏移存取）；以下为满足字节对齐的调整版：
+
+```
+     0                   1                   2                   3
+     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    | (record header starts)                                        |
+    |                                                               |
+    |                                                               |
+    |                         record secret                         |
+    |                           (32 Bytes)                          |
+    |                                                               |
+    |                                                               |
+    |                                                               |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |                      record bid (4 Bytes)                     |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |                    socket hash31 (4 Bytes)                    |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |                                                               |
+    |                           socket IP                           |
+    |                           (16 Bytes)                          |
+    |                                                               |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |     socket port (2 Bytes)     |       -       |    offline    |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |                       last active time                        |
+    |                           (8 Bytes)                           |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |                        last noop time                         |
+    |                           (8 Bytes)                           |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |               -               |    permits count (2 Bytes)    |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    | (allowlist starts)      bid (4 Bytes)                         |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |                 value = hash31|valid (4 Bytes)                |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |                         bid (4 Bytes)                         |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |                 value = hash31|valid (4 Bytes)                |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |                              ...                              |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+```
+
+其中：
+
+1. 不变量：`record bid`、`secret`、`socket hash31`、`IP`、`port` 随记录创建即固定不变；
+2. 可变量：`last active time` 由管理线程和转发线程更新，`last noop time`、`offline` 仅由管理线程更新；
+3. 通行证：从第 80 字节开始，后面为通行证区，长度由 ```allowlist_max_entries × 8``` 决定，记录数由 `permits count` 字段表示；每条记录 8 字节，前 4 字节为对方记录 bid，后 4 字节中，前 31 bits 为对方记录 socket hash31，最后 1 bit 为通行证有效标志位；槽 i 位于 `80 + i×8`；
+4. 线图全称 ↔ 文档字段名：record secret=secret、record bid=bid、socket hash31=hash31、socket IP=ip、socket port=port、offline=offline、last active time=last_time、last noop time=last_noop_time、permits count=cnt；
+5. 线图中 `-` 为保留/未定义字节（对齐填充）。
 
 #### 视图与接口实现（代码形态）
 
 槽化后没有持久 Permit 对象：searchPermit 返回**临时可写视图**（持槽引用，不入池）。
 
 ```dart
-/// 槽 = { bid, 对方 ip, 对方 port, valid }
+/// 槽 = { bid, hash31|valid }
 ///   槽主 = 所属 record（自己的 socket，不入槽，由记录提供）
-///   IPv4 槽 11 B：bid(4) ip(4) port(2) valid(1)，块首正向，槽 i @ i×11
-///   IPv6 槽 23 B：bid(4) ip(16) port(2) valid(1)，块尾反向，槽 j @ 块长 − v6cnt×23 + j×23
-///   段内均按 bid 升序；剩余空间 = 块长 − v4cnt×11 − v6cnt×23
+///   槽 8 B：bid(4) + value(4)，头部之后正向，槽 i @ 80 + i×8；bid/value 均大端
+///   value = hash31 | valid（hash31 = SHA-256(socket) 截 32 位 & 0xFFFFFFFE，bit0 = valid）
+///   槽整体按 bid 升序；剩余空间 = 槽区长度 − cnt×8
 class PermitView {                     // 临时可写视图，不入池
     final Record owner;                // 槽主（所属记录）
     final int bid;                     // 对方 bid（槽内）
-    final SocketAddress peer;          // 对方 socket（槽内快照）
-    final Uint8List buffer;            // 所属记录的 allowlist buffer（槽引用）
-    final int offset;                  // 槽偏移
+    final int hash31;                  // 对方 socket 的 31 位哈希（槽内快照）
+    final Uint8List buffer;            // 所属记录的记录行 buffer（头部 + 槽区，槽引用）
+    final int offset;                  // 槽偏移（80 + i×8）
     bool valid;                        // 槽内 valid 位（accept 后写回）
 
     bool match(Record record) =>
-        owner.socket == record.socket || peer == record.socket;
+        owner.socket == record.socket || hash31 == record.hash31;
 
     bool accept(Record record) {
         if (!match(record)) return false;   // 非当事人，拒绝
         valid = true;
-        buffer[offset + VALID_OFFSET] = 1;  // 置位并同步写回槽内
+        buffer[offset + 7] |= 1;            // 置 value bit0（valid）；大端，value 末字节
         return true;
     }
 }
@@ -138,33 +197,32 @@ class PermitView {                     // 临时可写视图，不入池
 接口实现（Record 上，外部经此访问 allowlist）：
 
 ```dart
-PermitView? searchPermit(int bid, [int? addressFamily]) {
-    // 段内二分（v4 段起点 0、v6 段起点 块长 − v6cnt×23，段内 bid 升序）
-    // 传 addressFamily 只查对应段（调用方持有对方 record 时，见用户信息记录文档）；未传则两段都查
-    // 命中 → 视图（owner/bid/peer/valid）；未命中 → null
+PermitView? searchPermit(int bid) {
+    // 槽区二分（槽 i @ 80 + i×8，按 bid 升序）
+    // 命中 → 视图（owner/bid/hash31/valid）；未命中 → null
 }
 
 bool insertPermit(int bid, PermitView permit) {
-    // 剩余空间 = 块长 − v4cnt×11 − v6cnt×23；< 槽大小 → false
-    // 段内二分定位插入点，memmove（v4 后续槽后移 / v6 前部槽前移）
-    // 写入 {bid, peer.ip, peer.port, permit.valid}；v4cnt++ / v6cnt++
+    // 剩余空间 = 槽区长度 − cnt×8；< 8 → false
+    // 二分定位插入点，memmove 后移
+    // 写入 {bid, permit.hash31 | permit.valid}；cnt++
 }
 
-void removePermit(int bid, [int? addressFamily]) {
-    // 二分定位（addressFamily 传参同 searchPermit），memmove 覆盖删除；v4cnt-- / v6cnt--；不存在幂等
+void removePermit(int bid) {
+    // 二分定位，memmove 覆盖删除；cnt--；不存在幂等
 }
 
 List<int> clearPermits() {
-    // 收集全部槽 bid → v4cnt = v6cnt = 0 → 返回列表
+    // 收集全部槽 bid → cnt = 0 → 返回列表
 }
 
 List<int> allowAll() {
-    // 收集全部定向槽 bid → v4cnt = v6cnt = 0
-    // 槽 0 写 {bid:1, ip:0.0.0.1, port:1, valid:1}，v4cnt = 1
+    // 收集全部定向槽 bid → cnt = 0
+    // 槽 0 写 {bid:1, value:固定值}，cnt = 1
     // 返回被清除的 bid 列表
 }
 
-bool isAllowAll() => v4cnt >= 1 && 槽 0 的 bid == 1;
+bool isAllowAll() => cnt >= 1 && 槽 0 的 bid == 1;
 ```
 
 **双向确认（跨侧置位）**——视图 accept 的唯一合法调用场景：
@@ -172,10 +230,10 @@ bool isAllowAll() => v4cnt >= 1 && 槽 0 的 bid == 1;
 ```dart
 // B 后发 "ACPT" A（A 先 ACPT 过 B）：
 // 1) B 侧建新槽（后发方新槽 valid=1）
-B.record.insertPermit(X, view(B.record, X, A.socket, valid: true));
-// 2) A 侧已有槽 {bid:Y, peer:B.socket, valid:0} 跨侧置位
+B.record.insertPermit(X, view(B.record, X, A.record.hash31, valid: true));
+// 2) A 侧已有槽 {bid:Y, hash31:B.record.hash31, valid:0} 跨侧置位
 AView = A.record.searchPermit(Y);
-AView.accept(A.record);   // 槽主 A 命中 → valid=1 写回（或 accept(B.record)，快照命中亦可）
+AView.accept(A.record);   // 槽主 A 命中 → value |= 1 写回（或 accept(B.record)，哈希命中亦可）
 ```
 
 > 视图 accept 只在**跨侧置位**时调用（此时双方均已确认）；单方 "ACPT"（A 先 ACPT B）流程只调 `insertPermit` 建槽（valid=0）、**不调 accept**——permit 未生效。若对单方槽误调 accept(槽主) 会单方生效，实现时须由服务器流程保证调用时机。
@@ -336,9 +394,9 @@ reply_rate_limit = 10
 # allowlist; an "ACPT" that would exceed this limit has the overflowing
 # entries skipped (the rest still apply) and is answered with "FAIL"
 # carrying the failed bid subset, bounding the memory a forged ACPT
-# flood can occupy (entries, default: 256; the allowlist buffer length
-# is derived as this value * 11 bytes on the IPv4 slot basis, and the
-# IPv6 capacity is about half, see the memory optimization section)
+# flood can occupy (entries, default: 256; the allowlist slot area
+# length is derived as this value * 8 bytes, IPv4/IPv6 slots share
+# the same 8-byte format, see the memory optimization section)
 allowlist_max_entries = 256
 # NOOP immunity window: after a "NOOP" that cancels a forged "FIN!" the
 # record's last_noop_time is refreshed; a later "FIN?" within this

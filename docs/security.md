@@ -275,7 +275,7 @@ bid 与 socket 绑定（socket 即身份，见架构文档）；若某 record �
 | handshake_min_payload | 512 | 握手上行包最小载荷（防放大） |
 | unconfirmed_reply_buckets | 1024 | 共享计数器时间分桶数 |
 | reply_rate_limit | 10/s | 未确认来源的 "FAIL" 应答限频 |
-| allowlist_max_entries | 256 | 每条记录通行证列表上限（buffer 长度 = 值 × 11 字节） |
+| allowlist_max_entries | 256 | 每条记录通行证列表上限（槽区长度 = 值 × 8 字节，IPv4/IPv6 槽同格式） |
 | max_records | 65536 | 内存记录总数上限（新建握手将创建记录时已达上限回 "FAIL"，仅内定流程豁免） |
 | noop_immunity_window | 2.0s | "NOOP" 免疫窗口（防 "FIN?" 踢人；窗口内应答但不标记 offline） |
 | server_secret_rotate_interval | 600s | 服务器密钥轮换周期 |
