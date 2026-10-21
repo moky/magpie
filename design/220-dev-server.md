@@ -253,6 +253,41 @@ AView.accept(A.record);   // 槽主 A 命中 → value |= 1 写回（或 accept(
 > 每次创建分配记录时，都需要同时建立两个索引（分别以 bid、socket 信息为 key）指向该记录，以方便后面查询。
 > secret 一经确认写入记录后不再改变（重新握手仅下发原值），直到该记录被回收。
 
+回收策略（紧急情况下的自救措施，建议方案）：
+
+```python
+    def _purge(self, now: float):
+        # 0. 取配置中的 record_expires（默认 24 小时）
+        expires = self._config.record_expires
+        min_expires = self._config.record_active_timeout
+        max_records = self._config.max_records * 0.8
+        # 当前记录总数
+        count = self._count_of_records()
+        while True:
+            # 1. 从记录分配表中获取超时记录
+            expired_records = self._select_expired_records(expires=expires)
+            # 2. 逐条回收：先反向清理通行证，再删除记录
+            for record in expired_records:
+                with self._lock:
+                    # 2.1. 删除通行证（反向清理）：
+                    #      读本记录 allowlist，按其中 bid 反向定位对方记录删条目
+                    self._remove_permits(record=record)
+                    # 2.2. 删除记录（同时清理索引）
+                    self._remove_record(record=record)
+            # 3. 检查余量
+            count -= len(expired_records)
+            if count < max_records:
+                # 剩余空间充足，清理结束
+                return True
+            # 记录数仍超过最大容量的 80%，剩余空间紧张
+            # 紧急自救：缩短超时时间继续下一轮清理
+            expires /= 2.0
+            if expires <= min_expires:
+                break
+        # 记录超时时间已缩至极限，服务器仍高负荷运行
+        return False
+```
+
 ### 服务器密钥轮换与握手防洪
 
 服务器内部维护一个**密钥组 server_secrets**（列表，初始化时包含一个随机密钥，须用密码学安全随机数）与最后生成时间 last_secret_time，用于计算/验证握手令牌 token：

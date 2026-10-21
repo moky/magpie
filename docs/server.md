@@ -129,20 +129,45 @@ bid 为 32 位无符号整数，**全随机**生成：在 `0x00010000 ~ 0x7FFFFF
 
 ### 6.3 回收（purge）
 
-```dart
-void purge(DateTime now) {
-    // 1. 只读遍历收集过期记录（last_time 超过 record_expires），暂不删除
-    // 2. 逐个遍历过期记录的 allowlist：按其中的 bid 找到对方记录，
-    //    删除对方 allowlist 中引用本 bid 的残留条目
-    // 3. 最后统一删除过期记录（同时移除 bid 索引与 socket 索引）
-}
+```python
+    def _purge(self, now: float):
+        # 0. 取配置中的 record_expires（默认 24 小时）
+        expires = self._config.record_expires
+        min_expires = self._config.record_active_timeout
+        max_records = self._config.max_records * 0.8
+        # 当前记录总数
+        count = self._count_of_records()
+        while True:
+            # 1. 从记录分配表中获取超时记录
+            expired_records = self._select_expired_records(expires=expires)
+            # 2. 逐条回收：先反向清理通行证，再删除记录
+            for record in expired_records:
+                with self._lock:
+                    # 2.1. 删除通行证（反向清理）：
+                    #      读本记录 allowlist，按其中 bid 反向定位对方记录删条目
+                    self._remove_permits(record=record)
+                    # 2.2. 删除记录（同时清理索引）
+                    self._remove_record(record=record)
+            # 3. 检查余量
+            count -= len(expired_records)
+            if count < max_records:
+                # 剩余空间充足，清理结束
+                return True
+            # 记录数仍超过最大容量的 80%，剩余空间紧张
+            # 紧急自救：缩短超时时间继续下一轮清理
+            expires /= 2.0
+            if expires <= min_expires:
+                break
+        # 记录超时时间已缩至极限，服务器仍高负荷运行
+        return False
 ```
 
 - 周期触发：管理线程每 `record_recycle_interval`（600s）调用一次（**周期触发**，非仅在空闲时）；
-- 过期判定：`last_time` 超过 `record_expires`（86400s = 24h）；
-- 残留条目清理（见架构文档 8 节）：遍历每个过期记录的 allowlist 的键（该记录许可过的对方 bid），按 bid 找到对方记录并删除其中引用本 bid 的条目，最后删除过期记录——无需维护任何全局索引；
-- 查询不做惰性过期判断（记录存在即按有效处理），回收统一由 purge 完成；
-- 实现建议"先收集后删除"，缩短持锁时间；不要求绑定其他周期任务。
+- 正常回收：`last_time` 超过 `record_expires`（86400s = 24h）即回收；
+- **紧急自救**：记录数仍 ≥ `max_records × 0.8` 时，回收阈值逐轮减半至 `record_active_timeout`（60s），仍超限则判定高负荷；
+- 残留条目清理（见架构文档 8 节）：删除记录前先反向清理——读本记录 allowlist 的键（该记录许可过的对方 bid），按 bid 找到对方记录并删除其中引用本 bid 的条目，再删除记录（同时移除 bid 索引与 socket 索引）——无需维护任何全局索引；
+- 锁粒度：收集无锁（记录分配表结构仅管理线程增删），逐条删除持短锁；
+- 查询不做惰性过期判断（记录存在即按有效处理），回收统一由 purge 完成。
 
 ### 6.4 应用密钥重载
 
