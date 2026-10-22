@@ -106,7 +106,7 @@ allowlist 槽区与头部共用**单 buffer 定长槽**：
 - 槽整体从头部之后正向按 bid 升序存放（槽 i 位于 `80 + i×8`），查询/插入/删除共用同一套二分 + memmove；剩余空间 = `槽区长度 − cnt×8`，追加前须 ≥ 8——容量 = allowlist_max_entries；
 - 残余风险：match 基于 31 位哈希快照，同一 bid 新旧持有者定向碰撞概率 2^-31（静默误放行仅理论存在；owner 侧仍为完整 socket 精确比较）；
 - **双向确认由跨侧置位实现**：后发 "ACPT" 一方在建立自己一侧槽的同时（后发方新槽 valid=1），将先发方侧对应槽 valid 置位（单方 "ACPT" 不置位、未生效）；"DENY" 只删自己侧槽；"DENY *" 清空直接置 cnt = 0；
-- **通配通行证**（"ACPT *" 触发 ```allowAll()```，见用户信息记录文档）固定写槽 0，槽内容 {bid:1, value:固定值}（match 恒真，value 无实际用途），并置 cnt=1（清除全部定向授权）；isAllowAll() 判定 O(1)：`cnt ≥ 1 且槽 0 的 bid 字段 == 1`。bid=1 属内定保留区间（H=0），不会与真实授权撞车。
+- **通配通行证**（"ACPT *" 触发 ```allowAll()```，见用户信息记录文档）固定写槽 0/1/2，槽内容 {bid:1, value:0x00000001}、{bid:2, value:0x00000001}、{bid:3, value:0x00000001}（match 恒真，value 无实际用途），并置 cnt=3（清除全部定向授权）；isAllowAll() 判定：`cnt == 3 且槽 0/1/2 的 bid 字段分别为 1/2/3`。真实 permit 按 bid 升序排列，三连判定被误触需三条特权端口内定记录按序并存，实际不可达。
 
 #### Record buffer 内存分配格式
 
@@ -218,11 +218,11 @@ List<int> clearPermits() {
 
 List<int> allowAll() {
     // 收集全部定向槽 bid → cnt = 0
-    // 槽 0 写 {bid:1, value:固定值}，cnt = 1
+    // 槽 0/1/2 分别写 {bid:1/2/3, value:0x00000001}，cnt = 3
     // 返回被清除的 bid 列表
 }
 
-bool isAllowAll() => cnt >= 1 && 槽 0 的 bid == 1;
+bool isAllowAll() => cnt == 3 && 槽 0/1/2 的 bid 分别为 1/2/3;
 ```
 
 **双向确认（跨侧置位）**——视图 accept 的唯一合法调用场景：
