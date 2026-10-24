@@ -254,7 +254,7 @@ ACPT 可携带多个 bid，按错误类型分类处理：
 
 ```dart
 // 先在 A 的记录中查找属于 B 的通行证
-var permit = X.record.searchPermit(Y);
+var permit = X.record.searchPermit(Y.record);
 if (permit != null && permit.match(Y.record)) {
     // 通行证已存在且目标未变（此通行证必含对 B 的授权）
     // 无需更新，直接返回
@@ -265,24 +265,24 @@ if (permit != null && permit.match(Y.record)) {
     X.record.removePermit(Y);
 }
 // 本地通行证不存在，则在 B 的记录中查找属于 A 的通行证
-permit = Y.record.searchPermit(X);
+permit = Y.record.searchPermit(X.record);
 if (permit == null) {
     // 如果仍然不存在（正常情况下是因为 A 先发起 ACPT）
-    // 则新建一个属于 B 的通行证（含对 B 授权）
+    // 则新建一个属于 B 的通行证（含对 B 授权；valid=0，单方未确认）
     permit = Permit(Y.record);
 } else if (permit.match(X.record)) {
-    // 如果存在（通常是因为 B 先发起 ACPT，此时已含对 A 的授权）
-    // 则添加对 B 的授权
+    // 如果存在（通常是因为 B 先发起 ACPT，此时已含对 A 的授权；通配模拟命中亦走此分支）
+    // 则添加对 B 的授权（valid 置 1）
     permit.accept(Y.record);
-    // （注意：此时 B 侧引用立即生效）
+    // （注意：此时 B 侧引用立即生效；通配模拟对象只读，accept 仅校验不写槽）
 } else {
     // 陈旧通行证（发起方 bid 换持有者 / 持有者换网）
-    // 清理后重建
+    // 清理后重建（valid=0）
     Y.record.removePermit(X);
     permit = Permit(Y.record);
 }
-// 空间足够时写入 A 的记录表（空间不足由 insertPermit 返回 null 表示失败）
-if (X.record.insertPermit(Y, permit) == null) {
+// 空间足够时写入 A 的记录表（空间不足由 insertPermit 返回 false）
+if (!X.record.insertPermit(Y.record, permit)) {
     // A 的记录表空间不足，无法写入
     return null;
 }
@@ -327,19 +327,17 @@ return permit;
 
 - 通配授权为**原子操作**：执行 `X.record.allowAll()`（清空现有全部定向通行证并建立通配通行证），应答 "DONE" 回显被清除的定向 bid 列表；
 - 通配通行证对**任意 bid 有效**（match 恒真），无需校验 socket；
-- 通配生效期间定向 "ACPT" 回复 "DONE"（意图已被通配覆盖，不建立定向记录）、定向 "DENY" 回复 "FAIL"（与通配冲突，无法满足），须先 "DENY *" 退出通配；"DENY *" 连通用配一并清除；
+- 通配生效期间：通配方自身发定向 "ACPT" 幂等成功（searchPermit 通配模拟命中、不落盘、通配槽不变）；普通方对通配方发定向 "ACPT" 走正常添加流程（本侧落盘，对方通配即视为已确认，valid=1）；定向 "DENY" 一律回复 "FAIL"（与通配冲突，无法满足），须先 "DENY *" 退出通配（清空会连同通配通行证一并清除，记录回到默认拒绝状态）；
 - 通配状态随记录回收/服务器重启失效。
 
 ### 8.5 通行权检查
 
-检查 A 是否有权给 B 发送时，**先后在双方 allowlist 中查找**，任一边查到有效即放行（防止一方被攻击者强行删掉通行证）；命中后还须校验**来源与目标双方的 socket 均与本通行证匹配**（双方均须为本通行证当事人）；任一侧处于通配授权状态亦视为命中、直接放行：
+检查 A 是否有权给 B 发送时，**先后在双方 allowlist 中查找**，任一边查到有效即放行（防止一方被攻击者强行删掉通行证）；命中后还须校验**来源与目标双方的 socket 均与本通行证匹配**（双方均须为本通行证当事人）；通配状态下 `searchPermit` 对任意 record 均返回有效通行证（match 恒真、valid=1），自然命中放行：
 
 ```dart
-permit = X.record.searchPermit(Y);
-permit ??= Y.record.searchPermit(X);
+permit = X.record.searchPermit(Y.record);
+permit ??= Y.record.searchPermit(X.record);
 ok = permit != null && permit.valid && permit.match(X.record) && permit.match(Y.record);
-ok ||= X.record.isAllowAll();
-ok ||= Y.record.isAllowAll();
 ```
 
 > 双向匹配可拒绝 bid 回收重分配产生的残留条目：原关系对应的持有者已更换，目标 socket 不匹配即拒绝，残留条目不会导致误放行；通配放行不破坏该检测（通配对任意 bid 有效，本身即意图允许全部）。实现层槽内快照为对方 socket 的 31 位哈希（`hash31 = SHA-256(socket) 截 32 位 & 0xFFFFFFFE`），`match` 据此比较；同一 bid 新旧持有者哈希碰撞概率 2^-31（定向碰撞，静默误放行仅理论存在，见服务器文档 6.5）。

@@ -102,11 +102,12 @@ allowlist 槽区与头部共用**单 buffer 定长槽**：
 - 每槽为**单向通行证**（Permit._t 的定长化；槽主即所属记录，其 socket **不入持久存储**、由所属记录提供）：bid(4) + value(4)；value = 31 位哈希 | valid：
   - 身份哈希 `hash31(socket) = SHA-256(socket) 截 32 位 & 0xFFFFFFFE`（高 31 位，bit0 恒 0）；写槽 `value = hash31 | valid`，valid 为 bit0（0 = 未确认、1 = 已确认）；
   - 读身份（比较）：槽值 & 0xFFFFFFFE 与 record.hash31 比较；读 valid：槽值 & 1；跨侧置位：槽值 |= 1；
-  - 查询返回**临时可写视图**（槽主 socket + 槽内哈希 + valid，不入池），其 match：record.socket 为槽主（完整 socket 精确比较）或 record.hash31 与槽内哈希相等（31 位比较，防 bid 重用）；视图**持槽引用**（buffer + 槽偏移），accept(record) 在 match(record) 时置槽内 valid=1 并同步写回——跨侧置位的落点即视图引用的原槽；insertPermit 则将视图当前状态（哈希 + valid）拷入新槽；
+  - 查询返回**临时可写视图**（槽主 socket + 槽内哈希 + valid，不入池），其 match：record.socket 为槽主（完整 socket 精确比较）或 record.hash31 与槽内哈希相等（31 位比较，防 bid 重用）；视图**持槽引用**（buffer + 槽偏移），accept(record) 在 match(record) 时置槽内 valid=1 并同步写回——跨侧置位的落点即视图引用的原槽；**通配状态下 searchPermit 不返回视图，而返回新建只读模拟 Permit(record, valid:1)**（match 恒真、不入池、不持槽引用，accept 仅校验不写槽）；
+  - insertPermit 写槽按 record 比较：`permit.bid == record.bid` 时直写 `{record.bid, permit.hash31 | permit.valid}`；否则写 `{record.bid, record.hash31 | permit.valid}`（此路径 valid 恒为 1：对方记录必已 accept 置位，或为通配初始化）；
 - 槽整体从头部之后正向按 bid 升序存放（槽 i 位于 `80 + i×8`），查询/插入/删除共用同一套二分 + memmove；剩余空间 = `槽区长度 − cnt×8`，追加前须 ≥ 8——容量 = allowlist_max_entries；
 - 残余风险：match 基于 31 位哈希快照，同一 bid 新旧持有者定向碰撞概率 2^-31（静默误放行仅理论存在；owner 侧仍为完整 socket 精确比较）；
 - **双向确认由跨侧置位实现**：后发 "ACPT" 一方在建立自己一侧槽的同时（后发方新槽 valid=1），将先发方侧对应槽 valid 置位（单方 "ACPT" 不置位、未生效）；"DENY" 只删自己侧槽；"DENY *" 清空直接置 cnt = 0；
-- **通配通行证**（"ACPT *" 触发 ```allowAll()```，见用户信息记录文档）固定写槽 0/1/2，槽内容 {bid:1, value:0x00000001}、{bid:2, value:0x00000001}、{bid:3, value:0x00000001}（match 恒真，value 无实际用途），并置 cnt=3（清除全部定向授权）；isAllowAll() 判定：`cnt == 3 且槽 0/1/2 的 bid 字段分别为 1/2/3`。真实 permit 按 bid 升序排列，三连判定被误触需三条特权端口内定记录按序并存，实际不可达。
+- **通配通行证**（"ACPT *" 触发 ```allowAll()```，见用户信息记录文档）固定写槽 0/1/2，槽内容 {bid:1, value:0x00000001}、{bid:2, value:0x00000001}、{bid:3, value:0x00000001}（match 恒真，value 无实际用途），并置 cnt=3（清除全部定向授权）；isAllowAll() 判定：`cnt == 3 且槽 0/1/2 的 bid 字段分别为 1/2/3`。真实 permit 按 bid 升序排列，三连判定被误触需三条特权端口内定记录按序并存，实际不可达。通配状态下 searchPermit(record) 对任意 record 返回只读模拟 Permit(record, valid:1)（见"视图与接口实现"）。
 
 #### Record buffer 内存分配格式
 
@@ -166,7 +167,7 @@ allowlist 槽区与头部共用**单 buffer 定长槽**：
 
 #### 视图与接口实现（代码形态）
 
-槽化后没有持久 Permit 对象：searchPermit 返回**临时可写视图**（持槽引用，不入池）。
+槽化后没有持久 Permit 对象：searchPermit 命中槽时返回**临时可写视图**（持槽引用，不入池）；**通配状态下返回新建只读模拟 Permit(record, valid:1)**（match 恒真、无槽引用、不可写入）。
 
 ```dart
 /// 槽 = { bid, hash31|valid }
@@ -197,15 +198,17 @@ class PermitView {                     // 临时可写视图，不入池
 接口实现（Record 上，外部经此访问 allowlist）：
 
 ```dart
-PermitView? searchPermit(int bid) {
-    // 槽区二分（槽 i @ 80 + i×8，按 bid 升序）
+PermitView? searchPermit(Record record) {
+    // 通配状态（isAllowAll()）→ 返回只读模拟 Permit(record, valid:1)（match 恒真，不入池、不持槽引用）
+    // 否则槽区二分（槽 i @ 80 + i×8，按 bid = record.bid 升序）
     // 命中 → 视图（owner/bid/hash31/valid）；未命中 → null
 }
 
-bool insertPermit(int bid, PermitView permit) {
+bool insertPermit(Record record, PermitView permit) {
     // 剩余空间 = 槽区长度 − cnt×8；< 8 → false
-    // 二分定位插入点，memmove 后移
-    // 写入 {bid, permit.hash31 | permit.valid}；cnt++
+    // permit.bid == record.bid → 直写 {record.bid, permit.hash31 | permit.valid}
+    // 否则 → 写 {record.bid, record.hash31 | permit.valid}（此路径 permit.valid 恒 1：已 accept 置位或通配初始化）
+    // 二分定位插入点，memmove 后移；cnt++
 }
 
 void removePermit(int bid) {
@@ -230,9 +233,9 @@ bool isAllowAll() => cnt == 3 && 槽 0/1/2 的 bid 分别为 1/2/3;
 ```dart
 // B 后发 "ACPT" A（A 先 ACPT 过 B）：
 // 1) B 侧建新槽（后发方新槽 valid=1）
-B.record.insertPermit(X, view(B.record, X, A.record.hash31, valid: true));
+B.record.insertPermit(A.record, view(B.record, X, A.record.hash31, valid: true));
 // 2) A 侧已有槽 {bid:Y, hash31:B.record.hash31, valid:0} 跨侧置位
-AView = A.record.searchPermit(Y);
+AView = A.record.searchPermit(B.record);
 AView.accept(A.record);   // 槽主 A 命中 → value |= 1 写回（或 accept(B.record)，哈希命中亦可）
 ```
 

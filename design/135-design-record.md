@@ -27,8 +27,8 @@ Record 属性：
 
 Record 对通行证提供以下封装接口，外部一律通过接口访问（不得直接读写 allowlist 字段）：
 
-- `searchPermit(bid)`：按 bid 查找通行证，未命中返回 null；
-- `insertPermit(bid, permit)`：写入一条通行证，空间不足返回 null（见"添加通行证"）；
+- `searchPermit(record)`：按 record.bid 查找通行证，未命中返回 null；**通配状态下对任意 record 返回新建只读 Permit(record, valid:1)**（相当于对任何 bid 均命中 valid=1 的通行证，但槽内无对应记录、不可写入，见"通配授权"）；
+- `insertPermit(record, permit)`：写入对 record.bid 的通行证（permit.bid 与 record.bid 不一致时采用 record 的哈希写槽，见"添加通行证"），空间不足返回 false；
 - `removePermit(bid)`：删除一条通行证，不存在时幂等返回；
 - `clearPermits()`：清空全部通行证，返回被清除的 bid 列表（见"清空通行证"）；
 - `allowAll()`：进入通配授权状态（清空现有全部定向通行证并建立通配通行证），返回被清除的 bid 列表（见"通配授权"）；
@@ -41,7 +41,7 @@ Record 对通行证提供以下封装接口，外部一律通过接口访问（�
 - **格式类错误**（bid 为负数、0、或等于发起方自身 bid）——客户端编码错误，整体拒绝（不处理任何 bid），回复 "FAIL" 并丢弃此指令退出；
 - **状态类错误**（bid 记录不存在、allowlist 空间不足）——逐条跳过，仅该条不执行，继续处理其余 bid，最后在应答中回显失败子集。
 
-对通过的 bid 逐个执行以下**添加流程**：先修改 Permit（B 侧共享引用立即生效），再经 insertPermit 检查空间并写入 A 侧（空间不足返回 null，见下）。全部处理完后：
+对通过的 bid 逐个执行以下**添加流程**：先修改 Permit（B 侧共享引用立即生效），再经 insertPermit 检查空间并写入 A 侧（空间不足返回 false，见下）。全部处理完后：
 
 - 存在失败条目 → 回复 "FAIL"，载荷 sources 回显**未成功的 bid 子集**（部分成功时不另发 "DONE"——成功条目由客户端以请求列表减去失败子集得知，或直接忽略、仅重试失败子集）；
 - 全部成功 → 回复 "DONE"，载荷 sources 回显**实际写入的 bid 列表**。
@@ -59,36 +59,36 @@ Record 对通行证提供以下封装接口，外部一律通过接口访问（�
 
 ```dart
     // 先在 A 的记录中查找属于 B 的通行证
-    var permit = X.record.searchPermit(Y);
+    var permit = X.record.searchPermit(Y.record);
     if (permit != null && permit.match(Y.record)) {
         // 通行证已存在且目标未变（此通行证必含对 B 的授权）
         // 无需更新，直接返回
         return permit;
-    } else {
-        // 本地通行证不存在或已陈旧（目标 bid 换持有者/持有者换网）
+    } else if (permit != null) {
+        // 本地通行证存在但已陈旧（目标 bid 换持有者/持有者换网）
         // 清理陈旧条目后按下方流程处理
         X.record.removePermit(Y);
     }
     // 本地通行证不存在，则在 B 的记录中查找属于 A 的通行证
-    permit = Y.record.searchPermit(X);
+    permit = Y.record.searchPermit(X.record);
     if (permit == null) {
         // 如果仍然不存在（正常情况下是因为 A 先发起 ACPT）
-        // 则新建一个属于 B 的通行证（含对 B 授权）
+        // 则新建一个属于 B 的通行证（含对 B 授权；valid=0，单方未确认）
         permit = Permit(Y.record);
     } else if (permit.match(X.record)) {
-        // 如果存在（通常是因为 B 先发起 ACPT，此时已含对 A 的授权）
-        // 则添加对 B 的授权
+        // 如果存在（通常是因为 B 先发起 ACPT，此时已含对 A 的授权；通配模拟命中亦走此分支）
+        // 则添加对 B 的授权（valid 置 1）
         permit.accept(Y.record);
-        // （注意：此时 B 侧共享引用立即生效）
+        // （注意：此时 B 侧共享引用立即生效；通配模拟对象只读，accept 仅校验不写槽）
     } else {
         // 陈旧通行证（发起方 bid 换持有者 / 持有者换网）
-        // 清理后重建
+        // 清理后重建（valid=0）
         Y.record.removePermit(X);
         permit = Permit(Y.record);
     }
-    // 空间足够时写入 A 的记录表（空间不足由 insertPermit 返回 null 表示失败）
-    if (X.record.insertPermit(Y, permit) == null) {
-        // A 的记录表空间不足，无法写入
+    // 空间足够时写入 A 的记录表（空间不足由 insertPermit 返回 false）
+    if (!X.record.insertPermit(Y.record, permit)) {
+        // A 的记录表空间不足，无法写入，该条失败
         return null;
     }
     // 写入成功，返回此通行证
@@ -159,7 +159,7 @@ Record 对通行证提供以下封装接口，外部一律通过接口访问（�
 服务器收到 "ACPT" 指令时，先判断 sources 长度，如果刚好为 3 且内部元素依次为 1, 2, 3（严格按序，客户端必须按此顺序编码），命中则走通配流程，否则才进入添加流程（先做 bid 合法性检查）：
 
 - 通配授权为**原子操作**：执行 ```X.record.allowAll()```（清空现有全部定向通行证并建立**通配通行证**，对任意 bid 有效、match 恒真），应答 "DONE" 并回显**被清除的定向 bid 列表**（客户端据此得知状态已重置）；
-- 通配生效期间，定向 "ACPT" 回复 "DONE"（意图已被通配覆盖，不建立定向记录、通配槽不变）；定向 "DENY" 回复 "FAIL"（与通配冲突，无法满足）；客户端须先 "DENY *" 退出通配；
+- 通配生效期间：通配方自身发定向 "ACPT" 幂等成功（searchPermit 通配模拟命中、不落盘、通配槽不变）；普通方对通配方发定向 "ACPT" 走正常添加流程（本侧落盘，对方通配即视为已确认，valid=1）；定向 "DENY" 一律回复 "FAIL"（与通配冲突，无法满足）；客户端须先 "DENY *" 退出通配；
 - 清空通行证（"DENY *"）会连同通配通行证一并清除，记录回到默认拒绝状态。
 
 > 选用三个有序小正数是为防止客户端误操作（与清空通行证一致，见上）；通配通行证随记录回收/重启一并失效，无需单独处理。
@@ -172,14 +172,12 @@ Record 对通行证提供以下封装接口，外部一律通过接口访问（�
 所以服务器在检查 A 是否有权给 B 发送消息时，会先后在双方的 allowlist 中查找通行证，
 任何一边查到有效的通行证均会放行（防止一方被攻击者强行删掉通行证的情况，见安全提案）；
 命中后还需校验来源与目标双方的 socket 均与本通行证匹配（Permit.match，双方均须为本通行证当事人；bid 回收重分配产生的残留条目因目标不匹配而拒绝）。
-若任一侧 allowlist 中存在**通配通行证**（见"通配授权"），视为命中并直接放行——通配通行证对任意 bid 有效（match 恒真），无需校验 socket。
+通配状态下 `searchPermit` 对任意 record 均返回有效通行证（match 恒真、valid=1），通行权检查自然命中——通配通行证对任意 bid 有效，无需校验 socket（见"通配授权"）。
 
 ```dart
-    permit = X.record.searchPermit(Y);
-    permit ??= Y.record.searchPermit(X);
+    permit = X.record.searchPermit(Y.record);
+    permit ??= Y.record.searchPermit(X.record);
     ok = permit != null && permit.valid && permit.match(X.record) && permit.match(Y.record);
-    ok ||= X.record.isAllowAll();
-    ok ||= Y.record.isAllowAll();
 ```
 
 #### 附 1： Permit

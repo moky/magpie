@@ -126,17 +126,17 @@ sequenceDiagram
 
     Note over A,B: 单向添加（A → B）
     A->>S: "ACPT"（sources: [Y]，带校验码）
-    S->>S: 查 X.record.searchPermit(Y) → 无；查 Y.record.searchPermit(X) → 无
-    S->>S: 新建 Permit(Y)（_s = Y.socket）→ X.record.insertPermit(Y, permit)
+    S->>S: 查 X.record.searchPermit(Y.record) → 无；查 Y.record.searchPermit(X.record) → 无
+    S->>S: 新建 Permit(Y.record)（valid=0）→ X.record.insertPermit(Y.record, permit)
     S-->>A: "DONE"（回显实际写入：src-command + sources）
 
     Note over A,B: 反向添加（B → A）后通行证生效
     B->>S: "ACPT"（sources: [X]）
-    S->>S: 查 Y.record.searchPermit(X) → 无；查 X.record.searchPermit(Y) → 有（_s = Y.socket）
-    S->>S: accept(A)（_t = A.socket）→ Y.record.insertPermit(X, permit)
+    S->>S: 查 Y.record.searchPermit(X.record) → 无；查 X.record.searchPermit(Y.record) → 有（A 先前的授权）
+    S->>S: accept 置位（A 侧槽 valid=1）→ Y.record.insertPermit(X.record, permit)
     S-->>B: "DONE"（回显实际写入）
 
-    Note over A,B: 同一 Permit 被双方引用，双方确认后 valid = true
+    Note over A,B: 双向确认后双方槽 valid=1，通行证生效
 ```
 
 - 幂等：重复 "ACPT" 同一个 bid 不会产生重复对象（先查已有再复用）；
@@ -189,8 +189,8 @@ sequenceDiagram
 ```
 
 - 通配通行证对任意 bid 有效（match 恒真），无需双方 ACPT；
-- **通配生效期间定向 "ACPT" 回复 "DONE"（意图已被通配覆盖，不建立定向记录）、定向 "DENY" 回复 "FAIL"（与通配冲突，无法满足）**，须先 "DENY *" 退出通配；
-- "DENY *" 连通用配一并清除；通配状态随记录回收/服务器重启失效。
+- **通配生效期间：通配方自身发定向 "ACPT" 幂等成功（searchPermit 通配模拟命中、不落盘、通配槽不变）；普通方对通配方发定向 "ACPT" 走正常添加流程（本侧落盘，对方通配即视为已确认，valid=1）；定向 "DENY" 一律回复 "FAIL"（与通配冲突，无法满足）**，须先 "DENY *" 退出通配；
+- 清空通行证（"DENY *"）会连同通配通行证一并清除，记录回到默认拒绝状态；通配状态随记录回收/服务器重启失效。
 
 ### 4.5 限制
 
