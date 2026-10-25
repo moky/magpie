@@ -259,8 +259,8 @@ if (permit != null && permit.match(Y.record)) {
     // 通行证已存在且目标未变（此通行证必含对 B 的授权）
     // 无需更新，直接返回
     return permit;
-} else {
-    // 本地通行证不存在或已陈旧（目标 bid 换持有者/持有者换网）
+} else if (permit != null) {
+    // 本地通行证存在但已陈旧（目标 bid 换持有者/持有者换网）
     // 清理陈旧条目后按下方流程处理
     X.record.removePermit(Y);
 }
@@ -283,7 +283,7 @@ if (permit == null) {
 }
 // 空间足够时写入 A 的记录表（空间不足由 insertPermit 返回 false）
 if (!X.record.insertPermit(Y.record, permit)) {
-    // A 的记录表空间不足，无法写入
+    // A 的记录表空间不足，无法写入，该条失败
     return null;
 }
 // 写入成功，返回此通行证

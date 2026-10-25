@@ -145,7 +145,7 @@ bool ok = (packet is ReliablePacket) && packet.verify(record.secret);
 - 伪造 "ACPT" 可添加恶意 bid 的通行证（攻击者再用该 bid 补全即生效），
   受害者无法单方解除（"DENY" 仅删自己侧），只能由应用层屏蔽，或重新握手更换 bid 摆脱；
 - 伪造 "ACPT" 通配标记（[1, 2, 3]，见用户信息记录文档）会清空受害者全部定向通行证并切换为通配授权（所有用户均可向其发数据），
-  受害者可发送 "DENY *" 退出通配，再重建定向授权（通配期间的定向 "ACPT"/"DENY" 一律被拒）。
+  受害者可发送 "DENY *" 退出通配，再重建定向授权（通配期间定向 "ACPT" 幂等成功、不建立定向记录，定向 "DENY" 一律回复 "FAIL"）。
 
 allowlist 条目数设有上限 `allowlist_max_entries`（默认 256），
 达到上限后新条目无法写入：ACPT 中空间不足的条目被跳过（不写入 A 侧），在应答中回显失败子集（见用户信息记录文档），
@@ -165,7 +165,7 @@ allowlist 条目数设有上限 `allowlist_max_entries`（默认 256），
 
 因此，当正常用户收到意外 "FIN!" 应答包时，在确认自己没有主动发送过 "FIN?" 的前提下，
 应立即发送 "NOOP" 给服务器取消这个“下线”操作；
-服务器收到 "NOOP" 之后即将 A.record.offline 改回 false，并将 record.last_noop_time 更新为当前服务器时间。
+服务器收到 "NOOP" 之后即将 A.record.offline 改回 false，并将 A.record.last_noop_time 更新为当前服务器时间。
 
 在接下来的 `noop_immunity_window`（默认 2 秒）内，服务器收到该客户端的 "FIN?" 指令时仍应答 "FIN!"，但不修改 offline。
 客户端若持续发送 "NOOP" 续期免疫窗口（如每 1 秒一次），攻击者反复发送 "FIN?" 便无法将受害者踢下线，受害者的数据转发也不受影响。
