@@ -45,10 +45,9 @@
 
 ## 消息包工厂
 
-在两个工具接口 BridgePacket 和 DirectPacket 上分别定义所对应的静态工厂方法，
-根据协议调用 create() 创建各类消息包：
+分别为 BridgePacket 和 DirectPacket 各定义一个工厂类，用于创建对应的消息包：
 
-|     | BridgePacket (C-S)       | DirectPacket (C-C)       | 说明                 |
+|     | BridgePacketFactory      | DirectPacketFactory      | 说明                 |
 |-----|--------------------------|--------------------------|----------------------|
 | 握手 | syn(source, request)     | syn(request)             | source 为预订 bid    |
 |     | synAck(target, response) | synAck(response)         | target 为新分配 bid   |
@@ -59,29 +58,31 @@
 |     | deny(source, request)    | -                        | 禁止 bid_list 通行    |
 | 心跳 | ping(source, request)    | ping(request)            |                     |
 |     | pong(magpie, response)   | pong(magpie, response)   | 应答参数从 magpie 复制 |
-| 挥手 | fin(source, request)     | fin(info, request)       |                     |
+| 挥手 | fin(source, request)     | fin(request)             |                     |
 |     | finAck(magpie, response) | finAck(magpie, response) | 应答参数从 magpie 复制 |
 | 无操作 | noop(source, request)  | noop(request)            | 无操作保活（如意外 "FIN!" 后的自愈回复，无需应答） |
 | 数据 | data(target, source, sn, index, count, payload) | data(sn, index, count, payload) | |
 |     | copy(magpie, response)   | copy(magpie, response)   | 应答参数从 magpie 复制 |
+| 解析器 | parse(data)            | parse(data)              | 检查校验 data 并析出消息包 |
 
 说明：
 
-1. 第一次握手时可填 source 作为预订（期望）bid，可选；预订失败（被占用/非法/服务器已满）时服务器回复 "FAIL" 指令包，由客户端自行决定重新申请或放弃；
-2. 除了 "DATA" 消息包之外（因其 payload 需要承载文件数据），其余各指令包在实现时均可携带一个可选参数 request/response 放在载荷当作附加信息；
-3. 系统指令的载荷遵循载荷文档定义的格式（纯 JSON 字符串，必须包含发送方时间戳 "time"），所有指令（含应答）均须携带发送方当前时间戳（秒），不允许为空。
-4. 通配授权（"ACPT *"）与清空通行证（"DENY *"）通过 acpt/deny 的 request 载荷传入通配标记 [1, 2, 3]（严格按序）实现，工厂方法本身不变（见载荷文档）。
+1. 在服务器上只有 BridgePacketFactory，客户端则两者都需要；
+2. 在服务器场景中，第一次握手时可填 source 作为预订（期望）bid，可选；预订失败（被占用/非法/服务器已满）时服务器回复 "FAIL" 指令包，由客户端自行决定重新申请或放弃；
+3. 服务器场景中的通配授权（"ACPT *"）与清空通行证（"DENY *"）通过 acpt/deny 的 request 载荷传入通配标记 [1, 2, 3]（严格按序）实现，工厂方法本身不变（见载荷文档）；
+4. 除了 "DATA" 消息包之外（因其 payload 需要承载文件数据），其余各指令包在实现时均可携带一个可选参数 request/response 放在载荷当作附加信息；
+5. 系统指令的载荷遵循载荷文档定义的格式（纯 JSON 字符串，必须包含发送方时间戳 "time"），所有指令（含应答）均须携带发送方当前时间戳（秒），不允许为空。
 
-### 消息包解析器
+### 消息包解析接口
 
-接收到完整的数据包之后，由解析器 Message Parser 进行校验解析。
+接收到完整的数据包之后，由相应消息工厂的 parse(data) 接口进行校验解析：
 
-### 解析器接口 Parser
+1. 服务器上只有 BridgePacketFactory 对象，客户端上则需要根据数据包来源决定选择对应的工厂；
+2. 根据协议依次检查 Magic Code、取得 type 中的各项标志位以及长度等信息，然后对数据合法性进行校验；
+3. 如果数据包校验不通过，则返回空，否则用解析出来的所有参数，创建对应的消息包对象并返回（服务器场景下的消息包可以有附加校验码）；解析层只做包级校验与类型判定，**不验证**附加校验码——验证由上层流程取得密钥后调用 ReliablePacket.verify() 完成（见附加校验码提案）。
 
-接口方法： parse(data)
-
-1. 根据协议依次检查 Magic Code、取得 type 中的各项标志位以及长度等信息，然后对数据合法性进行校验；
-2. 如果数据包校验不通过，则返回空，否则用解析出来的所有参数，根据 B 的值创建对应的消息包对象并返回（B=1 时创建 BridgePacket，B=0 时创建 DirectPacket）。
+> 由于服务器场景下只有 BridgePacket，所以 BridgePacketFactory 的 parse() 函数遇到 B=0 的可以直接丢弃；
+> 反之，DirectPacketFactory 的 parse() 函数遇到 B=1 的也可以直接丢弃。
 
 ## 工程目录
 

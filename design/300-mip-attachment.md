@@ -30,7 +30,7 @@ Magpie Protocol 核心协议层只定义了基础消息包格式，不包括整�
 
 ## SDK 升级
 
-由于直通包不需要 verify（其数据合法性由客户端应用负责），
+由于直连包不需要 verify（其数据合法性由客户端应用负责），
 所以对于升级后的协议，只需要升级 BridgePacket 相关部分的代码即可。
 
 ### 1. 升级 MessagePacket 类
@@ -113,7 +113,7 @@ class BridgePacket extends MessagePacket {
 
 ### 3. 扩展 BridgePacket，增加带校验码的子类 ReliablePacket
 
-（直通包不需要 verify）
+（直连包不需要 verify）
 
 ```dart
 class ReliablePacket extends BridgePacket {
@@ -179,15 +179,16 @@ bool _constantTimeByteEq(Uint8List a, Uint8List b) {
 }
 ```
 
-### 4. 实现 MagpieParser 接口
+### 4. 实现 BridgePacketFactory 的 parse() 接口
 
-更新最后的创建条件判断。
+服务器在**预处理线程**中调用解析接口，该线程不查询分配表、拿不到客户端密钥，因此解析层只做包级校验与类型判定，**不做**附加校验码验证（验证由管理线程/转发线程取得 `record.secret` 后调用 `ReliablePacket.verify()` 完成，见服务器设计）。
 
 ```dart
-final class MessageParser implements MagpieParser {
+class BridgePacketFactory {
 
-    @override
-    Magpie? parse(Uint8List buffer, {Uint8List? secret}) {
+    // ...
+
+    Magpie? parse(Uint8List buffer) {
         // 1. 前 8 个字节的有效性检查
         //    ...
         //    读出 headerLength 和 payloadLength ...
@@ -201,13 +202,14 @@ final class MessageParser implements MagpieParser {
         
         // 2. 头参数的有效性检查
         //    ...
+        if (bid != 1) {
+            assert(false, 'not a bridge packet: ${buffer.length}');
+            return null;
+        }
         
         // 3. 读取 payload，然后创建消息包对象
         
-        if (bid == 0) {
-            assert(tail == 0, 'data length error: ${buffer.length} != $headerLength + $payloadLength');
-            return DirectPacket(buffer, ...);
-        } else if (tail == 0) {
+        if (tail == 0) {
             return BridgePacket(buffer, ...);
         }
         assert(tail == 32, 'data length error: ${buffer.length} != $headerLength + $payloadLength + 32');

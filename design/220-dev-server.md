@@ -363,9 +363,11 @@ AView.accept(A.record);   // 槽主 A 命中 → value |= 1 写回（或 accept(
 
 命令行均为命名参数，全部可选：
 
-    magpie-bridge [--config=<FILE>] [--log-dir=/tmp]    (Python 版命令)
-    java -jar magpie-bridge.jar [--config=<FILE>] [--log-dir=/tmp]   (Java 版入口)
+    magpie-bridge [--host=<ADDR>] [--port=<NUM>] [--config=<FILE>] [--log-dir=/tmp]    (Python 版命令)
+    java -jar magpie-bridge.jar [--host=<ADDR>] [--port=<NUM>] [--config=<FILE>] [--log-dir=/tmp]   (Java 版入口)
 
+- --host       监听地址（缺省用配置文件 host，默认 0.0.0.0；两版均支持）
+- --port       UDP 监听端口（缺省用配置文件 port，默认 9527；两版均支持）
 - --config     配置文件路径（缺省尝试默认路径，见下；两版均支持）
 - --log-dir    日志目录（默认为空，不写文件；两版均支持）
 
@@ -482,4 +484,4 @@ forwarder_queue_size = 65536
 1. 所有时间值均为**浮点数的秒**（如 0.1 秒），代码内部自行转换为毫秒等内部单位；
 2. 容量类参数均为整数：waiting_queue_size、manager_queue_size、forwarder_queue_size 为任务数（任务即数据包与来源 socket 信息的封装，见架构文档），allowlist_max_entries、max_records 为条目数，socket_buffer_length 为字节数；
 3. 所有键缺失、段缺失或文件缺失时均回退到代码默认值（host 默认 0.0.0.0、port 默认 9527、forwarders 默认 8，与其余键行为一致）；
-4. 命令行 --config 指定的路径优先于默认路径；配置文件不存在时不报错，直接使用全部默认值。
+4. 命令行 --config 指定的路径优先于默认路径；--host/--port 指定时覆盖配置文件中的同名键（优先级：命令行 > 配置文件 > 代码默认值）；配置文件不存在时不报错，直接使用全部默认值。

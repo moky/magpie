@@ -207,13 +207,21 @@ class BridgePacket extends MessagePacket {
         
         payload: payload,
     );
-    
+```
+
+### 桥接包工厂 BridgePacketFactory
+
+解析/创建客户端与服务器通信的消息包
+
+```dart
+class BridgePacketFactory {
+
     /// 第一次握手
     /// [source] 为预订 bid（可选）：0 表示普通申请（由服务器分配），
     /// 非 0 表示客户端希望预订该 bid（新建预订须 > 65535；
     /// 若是 loopback 重握手复用之前的内定 bid，且该 socket 记录尚未被回收，可传 = port ≤ 65535 的原值；
     /// 记录已回收时该 bid 不再可用，应传 0 重新申请）。
-    factory BridgePacket.syn(Uint8List? request, {
+    BridgePacket syn(Uint8List? request, {
         int source = 0
     }) => BridgePacket.create(
         ack: 0,
@@ -233,7 +241,7 @@ class BridgePacket extends MessagePacket {
     /// 第二次握手
     /// response 为载荷数据区（含 secret/token/token_time/UDP/time，
     /// 由服务器逻辑构造，纯 JSON 格式）
-    factory BridgePacket.synAck(Uint8List? response, {
+    BridgePacket synAck(Uint8List? response, {
         required int target,  // 服务器为该客户端分配的 bid
     }) => BridgePacket.create(
         ack: 1,
@@ -253,7 +261,7 @@ class BridgePacket extends MessagePacket {
     /// 第三次握手
     /// response 原样回传第二次握手包中的 secret/token/token_time
     /// （数据区 time 取客户端当前时间），纯 JSON 格式
-    factory BridgePacket.ack(Uint8List? response, {
+    BridgePacket ack(Uint8List? response, {
         required int source,  // 从第二次握手包中得到的 target
     }) => BridgePacket.create(
         ack: 1,
@@ -272,7 +280,7 @@ class BridgePacket extends MessagePacket {
     
     /// 失败应答
     /// 服务器向客户端返回失败：target = 已分配的 bid；response 载荷按场景区分（bid 分配失败、对端离线、通行证修改失败等，具体格式见载荷文档）。
-    factory BridgePacket.fail(Uint8List? response, {
+    BridgePacket fail(Uint8List? response, {
         required int target,  // 客户端 bid（期望或已分配）
         int sn = 0,
         int index = 0,
@@ -294,7 +302,7 @@ class BridgePacket extends MessagePacket {
     
     /// 成功应答
     /// 服务器向客户端返回成功：target = 已分配的 bid；response 载荷按场景区分（如通行证修改成功回显实际写入的 bid 列表，具体格式见载荷文档）。
-    factory BridgePacket.done(Uint8List? response, {
+    BridgePacket done(Uint8List? response, {
         required int target,
         int sn = 0,
         int index = 0,
@@ -316,7 +324,7 @@ class BridgePacket extends MessagePacket {
     
     /// 添加通行证
     /// 允许通行的 source bid 列表放在 request（含 time）
-    factory BridgePacket.acpt(Uint8List? request, {
+    BridgePacket acpt(Uint8List? request, {
         required int source,
     }) => BridgePacket.create(
         ack: 0,
@@ -335,7 +343,7 @@ class BridgePacket extends MessagePacket {
     
     /// 撤销通行证
     /// 禁止通行的 source bid 列表放在 request（含 time）
-    factory BridgePacket.deny(Uint8List? request, {
+    BridgePacket deny(Uint8List? request, {
         required int source,
     }) => BridgePacket.create(
         ack: 0,
@@ -353,7 +361,7 @@ class BridgePacket extends MessagePacket {
     );
     
     /// 心跳
-    factory BridgePacket.ping(Uint8List? request, {
+    BridgePacket ping(Uint8List? request, {
         required int source,
     }) => BridgePacket.create(
         ack: 0,
@@ -372,7 +380,7 @@ class BridgePacket extends MessagePacket {
     
     /// 心跳应答
     /// （packet 为收到的 ping 包；response 为应答信息，遵循载荷文档格式（含 time），由调用方构造）
-    factory BridgePacket.pong(Magpie packet, [Uint8List? response]) => BridgePacket.create(
+    BridgePacket pong(Magpie packet, [Uint8List? response]) => BridgePacket.create(
         ack: 1,
         
         /// bid 对调，原路返回
@@ -390,7 +398,7 @@ class BridgePacket extends MessagePacket {
     );
     
     /// 第一次挥手
-    factory BridgePacket.fin(Uint8List? request, {
+    BridgePacket fin(Uint8List? request, {
         required int source,
     }) => BridgePacket.create(
         ack: 0,
@@ -409,7 +417,7 @@ class BridgePacket extends MessagePacket {
     
     /// 第二次挥手
     /// （packet 为收到的 fin 包；response 为应答信息，遵循载荷文档格式（含 time），由调用方构造）
-    factory BridgePacket.finAck(Magpie packet, [Uint8List? response]) => BridgePacket.create(
+    BridgePacket finAck(Magpie packet, [Uint8List? response]) => BridgePacket.create(
         ack: 1,
         
         /// bid 对调，原路返回
@@ -428,7 +436,7 @@ class BridgePacket extends MessagePacket {
     
     /// 无操作（保活/自愈）
     /// 用于意外收到 "FIN!" 时立即回复，以秒级恢复在线状态，无需应答（含 time）
-    factory BridgePacket.noop(Uint8List? request, {
+    BridgePacket noop(Uint8List? request, {
         required int source,
     }) => BridgePacket.create(
         ack: 0,
@@ -446,7 +454,7 @@ class BridgePacket extends MessagePacket {
     );
     
     /// 普通数据包，通过服务器转发给接收方
-    factory BridgePacket.data(Uint8List data, {
+    BridgePacket data(Uint8List data, {
         required int target,
         required int source,
         required int sn,
@@ -469,7 +477,7 @@ class BridgePacket extends MessagePacket {
     
     /// 数据应答包，通过服务器转发“确认收到”给原发送方
     /// （packet 为收到的数据包；response 为附加信息，默认为空）
-    factory BridgePacket.copy(Magpie packet, [Uint8List? response]) => BridgePacket.create(
+    BridgePacket copy(Magpie packet, [Uint8List? response]) => BridgePacket.create(
         ack: 1,
         
         // bid 对调，原路返回
@@ -486,6 +494,34 @@ class BridgePacket extends MessagePacket {
         payload: response,
     );
     
+    /// 对数据合法性进行校验，校验通过则返回相应的消息包
+    /// （收到包后，先检查头部各项信息是否合规，然后读取各字段以生成 Magpie 对象）
+	Magpie? parse(Uint8List buffer) {
+	    if (buffer.length < 8) {
+	        assert(false, 'data package error: $buffer');
+	        return null;
+	    }
+	    // 1. 前 8 个字节的有效性检查
+	    //    检查 Magic Code；
+	    //    读出 flags（其中 bid = (type >> 6) & 0x01）；
+	    //    检查 E 合法性：E = type & 0x07（低 3 位，bit 3 不检查）；
+	    //    E 只允许 0~4，取值 5/6/7 判定为错误包；
+	    //    检查约束：E>0 时 D 必须为 1（D=0 且 E>0 判定为错误包）；
+	    //    读出 headerLength 和 payloadLength，与 flags 一起计算检查头长度合法性；
+	    
+	    // 2. 头参数的有效性检查
+	    //    根据 flags 指示依次读出 target, source, sn, index, count, command 等参数；
+	    //    检查各项参数是否越界：若 D=1，则 sn 必须非 0（全 0 判定为错误包）；E>0 时 count 必须 > 1，且 0 <= index < count，否则为错误包；
+	    //    若 C=1，则 command 必须非 0（全 0 判定为错误包）；不校验 command 的具体取值（是否系统指令由上层判断）；
+        if (bid != 1) {
+            assert(false, 'not a bridge packet: ${buffer.length}');
+            return null;
+        }
+	    
+	    // 3. 读取 payload，然后创建消息包对象
+	    
+	    return BridgePacket(buffer, ...);
+	}
 }
 ```
 
@@ -620,6 +656,43 @@ class DirectPacket extends MessagePacket {
         
         payload: payload,
     );
+```
+
+### 直连包工厂 DirectPacketFactory
+
+解析/创建客户端与客户端直接通信的消息包。
+
+```dart
+class DirectPacketFactory {
+    
+    /// 对数据合法性进行校验，校验通过则返回相应的消息包
+    /// （收到包后，先检查头部各项信息是否合规，然后读取各字段以生成 Magpie 对象）
+	Magpie? parse(Uint8List buffer) {
+	    if (buffer.length < 8) {
+	        assert(false, 'data package error: $buffer');
+	        return null;
+	    }
+	    // 1. 前 8 个字节的有效性检查
+	    //    检查 Magic Code；
+	    //    读出 flags（其中 bid = (type >> 6) & 0x01）；
+	    //    检查 E 合法性：E = type & 0x07（低 3 位，bit 3 不检查）；
+	    //    E 只允许 0~4，取值 5/6/7 判定为错误包；
+	    //    检查约束：E>0 时 D 必须为 1（D=0 且 E>0 判定为错误包）；
+	    //    读出 headerLength 和 payloadLength，与 flags 一起计算检查头长度合法性；
+	    
+	    // 2. 头参数的有效性检查
+	    //    根据 flags 指示依次读出 target, source, sn, index, count, command 等参数；
+	    //    检查各项参数是否越界：若 D=1，则 sn 必须非 0（全 0 判定为错误包）；E>0 时 count 必须 > 1，且 0 <= index < count，否则为错误包；
+	    //    若 C=1，则 command 必须非 0（全 0 判定为错误包）；不校验 command 的具体取值（是否系统指令由上层判断）；
+        if (bid != 0) {
+            assert(false, 'not a direct packet: ${buffer.length}');
+            return null;
+        }
+	    
+	    // 3. 读取 payload，然后创建消息包对象
+	    
+	    return DirectPacket(buffer, ...);
+	}
     
     //
     //  TODO: 其他指令工厂跟 BridgePacket 类似，除了没有 target 和 source 参数
@@ -630,7 +703,7 @@ class DirectPacket extends MessagePacket {
 }
 ```
 
-### 计算公式
+## 计算公式
 
 ```dart
 static int calcType({
@@ -667,49 +740,5 @@ static int calcExt({
         assert(count == 1, 'packet count error: $count');
         return 0;
     }
-}
-```
-
-## 消息包处理器
-
-主要包括：有效性检查、解包和打包。
-
-打包操作由 Magpie 接口的 pack() 函数实现。
-
-### 处理器接口 MagpieParser
-
-收到包之后，第一步先检查头部各项信息是否合规，然后读取各字段生成 Magpie 对象。
-
-```dart
-final class MessageParser implements MagpieParser {
-
-	@override
-	Magpie? parse(Uint8List buffer) {
-	    if (buffer.length < 8) {
-	        assert(false, 'data package error: $buffer');
-	        return null;
-	    }
-	    // 1. 前 8 个字节的有效性检查
-	    //    检查 Magic Code；
-	    //    读出 flags（其中 bid = (type >> 6) & 0x01）；
-	    //    检查 E 合法性：E = type & 0x07（低 3 位，bit 3 不检查）；
-	    //    E 只允许 0~4，取值 5/6/7 判定为错误包；
-	    //    检查约束：E>0 时 D 必须为 1（D=0 且 E>0 判定为错误包）；
-	    //    读出 headerLength 和 payloadLength，与 flags 一起计算检查头长度合法性；
-	    
-	    // 2. 头参数的有效性检查
-	    //    根据 flags 指示依次读出 target, source, sn, index, count, command 等参数；
-	    //    检查各项参数是否越界：E>0 时 count 必须 > 1，且 0 <= index < count，否则为错误包；
-	    //    若 C=1，则 command 必须非 0（全 0 判定为错误包）；不校验 command 的具体取值（是否系统指令由上层判断）；
-	    
-	    // 3. 读取 payload，然后创建消息包对象
-	    
-	    if (bid == 0) {
-	        return DirectPacket(buffer, ...);
-	    } else {
-	        return BridgePacket(buffer, ...);
-	    }
-	}
-
 }
 ```

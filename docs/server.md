@@ -380,7 +380,7 @@ AView.accept(A.record);   // 槽主 A 命中 → value |= 1 写回（或 accept(
 1. 所有时间值均为**浮点数的秒**（如 0.1 秒），代码内部自行转换为毫秒等内部单位；
 2. 容量类参数均为整数：waiting_queue_size、manager_queue_size、forwarder_queue_size 为任务数（任务即数据包与来源 socket 信息的封装），allowlist_max_entries 为条目数，max_records 为记录总数，socket_buffer_length 为字节数；
 3. 所有键缺失、段缺失或文件缺失时均回退到代码默认值；
-4. `--config` 指定的路径优先于默认路径 `/etc/magpie/config.ini`；配置文件不存在时不报错，直接使用全部默认值。
+4. `--config` 指定的路径优先于默认路径 `/etc/magpie/config.ini`；`--host`/`--port` 指定时覆盖配置文件同名键（优先级：命令行 > 配置文件 > 默认值）；配置文件不存在时不报错，直接使用全部默认值。
 
 ### 9.2 配置示例
 
@@ -431,14 +431,16 @@ forwarder_queue_size = 65536
 命令行均为命名参数，全部可选：
 
 ```
-magpie-bridge [--config=<FILE>] [--log-dir=/tmp]          (Python 版)
-java -jar magpie-bridge.jar [--config=<FILE>] [--log-dir=/tmp]   (Java 版)
+magpie-bridge [--host=<ADDR>] [--port=<NUM>] [--config=<FILE>] [--log-dir=/tmp]    (Python 版)
+java -jar magpie-bridge.jar [--host=<ADDR>] [--port=<NUM>] [--config=<FILE>] [--log-dir=/tmp]   (Java 版)
 ```
 
+- `--host`：监听地址（缺省用配置文件 `host`，默认 `0.0.0.0`；两版均支持）；
+- `--port`：UDP 监听端口（缺省用配置文件 `port`，默认 `9527`；两版均支持）；`--host`/`--port` 指定时覆盖配置文件同名键（优先级：命令行 > 配置文件 > 默认值）；
 - `--config`：配置文件路径（缺省尝试默认路径 `/etc/magpie/config.ini`；两版均支持）；
 - `--log-dir`：日志目录（默认为空，不写文件；两版均支持）；
 - 未知参数会打印用法提示并退出；
-- 启动顺序：读取配置 → 绑定 `port` 的 UDP socket → 启动接收/预处理/管理/转发线程 → 读取 `app_secret_file`（若配置）确定握手模式 → 进入运行循环（管理线程处理系统指令 + 周期 purge + 密钥重载）。
+- 启动顺序：读取配置 → 绑定 `host:port`（默认 0.0.0.0:9527）的 UDP socket → 启动接收/预处理/管理/转发线程 → 读取 `app_secret_file`（若配置）确定握手模式 → 进入运行循环（管理线程处理系统指令 + 周期 purge + 密钥重载）。
 
 ### 9.4 工程目录
 
