@@ -28,7 +28,7 @@
 所有属性均为只读（不含 setter）
 
 - 扩展属性（只读）
-	- version : 协议版本，固定值 "1.0"
+	- version : 协议版本，固定值 "1.0"（**仅 SDK 侧元数据，不序列化进 8–32 字节协议头**；线上协议头只携带 Magic Code `MP\0\1`，见协议文档）
 	- ack : 应答标志位，取值范围 0 或 1
 	- bid : 桥接标志位，取值范围 0 或 1
 	- cmd : 命令标志位，取值范围 0 或 1 （普通数据包默认取 0）
@@ -42,6 +42,7 @@
 	- hasCmd : 是否包含命令（普通数据包默认为 false）
 	- hasDsn : 是否包含数据序列号
 	- hasExt : 是否包含额外分包参数
+	- copy() : 复制当前消息包（**不携带 attachment 附加校验码**；与工厂方法 `copy(magpie, response)` 构造 "COPY" 数据应答包的含义不同，注意区分）
 
 ## 消息包工厂
 
@@ -49,11 +50,11 @@
 
 |     | BridgePacketFactory      | DirectPacketFactory      | 说明                 |
 |-----|--------------------------|--------------------------|----------------------|
-| 握手 | syn(source, request)     | syn(request)             | source 为预订 bid    |
+| 握手 | syn(source, request)     | syn(request)             | source 为预订 bid（可选，0 = 由服务器分配） |
 |     | synAck(target, response) | synAck(response)         | target 为新分配 bid   |
-|     | ack(source, response)    | ack(response)            |                      |
-| 结果 | fail(target, response)   | -                        | 失败应答              |
-|     | done(target, response)   | -                        | 成功应答              |
+|     | ack(source, response)    | ack(response)            | source 取自第二次握手包的 target |
+| 结果 | fail(target, response)   | -                        | 失败应答；sn/index/count 为可选超集（见下注） |
+|     | done(target, response)   | -                        | 成功应答；sn/index/count 为可选超集（见下注） |
 | 权限 | acpt(source, request)    | -                        | 允许 bid_list 通行    |
 |     | deny(source, request)    | -                        | 禁止 bid_list 通行    |
 | 心跳 | ping(source, request)    | ping(request)            |                     |
@@ -64,6 +65,10 @@
 | 数据 | data(target, source, sn, index, count, payload) | data(sn, index, count, payload) | |
 |     | copy(magpie, response)   | copy(magpie, response)   | 应答参数从 magpie 复制 |
 | 解析器 | parse(data)            | parse(data)              | 检查校验 data 并析出消息包 |
+
+> 表格为便于对比的简化签名（先列 bid 角色参数，再列载荷）；完整实现见 210-dev-sdk-dart.md（Dart 命名参数示例，载荷为第一个参数）。
+>
+> **fail/done 可选超集**：`fail`/`done` 工厂额外接受可选 `sn`/`index`/`count`（默认 `0/0/1`），是 `110-design-type-cmd.md` 说明 2/5 允许的未来扩展位；当前系统指令场景 D=0、不携带 sn，服务器校验不锁定 B/D/E，收到时忽略这些字段。
 
 说明：
 
@@ -83,48 +88,3 @@
 
 > 由于服务器场景下只有 BridgePacket，所以 BridgePacketFactory 的 parse() 函数遇到 B=0 的可以直接丢弃；
 > 反之，DirectPacketFactory 的 parse() 函数遇到 B=1 的也可以直接丢弃。
-
-## 工程目录
-
-SDK 包括 Java、Python、Dart 等多个语言版本，
-其中 Python 版服务器与 Python 版 SDK 共用一个库 'magpie-bridge'。
-
-### Java SDK
-
-依赖版本：
-> Java 8
-
-工程配置参数：
-    name = 'Magpie'
-    group = 'io.github.moky'
-
-工程根目录：
-    magpie/sdk-java/
-
-### Python SDK
-
-依赖版本：
-> Python: >= 3.6
-
-工程配置参数：
-    name='magpie-bridge'
-
-工程根目录：
-    magpie/sdk-py/
-
-代码目录：
-    magpie/sdk-py/magpie_bridge/protocol/
-    magpie/sdk-py/magpie_bridge/magpie/
-
-协议定义相关的代码放在 protocol/ 目录下，工具类代码放在 magpie/ 下。
-
-### Dart SDK
-
-依赖版本：
-> sdk: '>=3.0.0 <4.0.0'
-
-工程配置参数：
-    name: magpie-bridge
-
-工程根目录：
-    magpie/sdk-dart/

@@ -32,7 +32,7 @@
 
 | 成员 | 说明 |
 |------|------|
-| version | 协议版本，固定 "1.0" |
+| version | 协议版本，固定 "1.0"（仅 SDK 侧元数据，不序列化进 8–32 字节协议头；线上协议头只携带 Magic Code `MP\0\1`） |
 | ack | 应答标志位（0/1） |
 | bid | 桥接标志位（0/1） |
 | cmd | 命令标志位（0/1，普通数据包默认 0） |
@@ -95,11 +95,11 @@ class MessagePacket implements Magpie {
 
 | 指令 | BridgePacketFactory (C-S) | DirectPacketFactory (C-C) | 说明 |
 |------|--------------------|--------------------|------|
-| 握手 | syn(source, request) | syn(request) | source 为预订 bid |
+| 握手 | syn(source, request) | syn(request) | source 为预订 bid（可选，0 = 由服务器分配） |
 | | synAck(target, response) | synAck(response) | target 为新分配 bid |
-| | ack(source, response) | ack(response) | |
-| 结果 | fail(target, response) | - | 失败应答 |
-| | done(target, response) | - | 成功应答 |
+| | ack(source, response) | ack(response) | source 取自第二次握手包的 target |
+| 结果 | fail(target, response) | - | 失败应答；sn/index/count 为可选超集（见下注） |
+| | done(target, response) | - | 成功应答；sn/index/count 为可选超集（见下注） |
 | 权限 | acpt(source, request) | - | 允许 bid_list 通行 |
 | | deny(source, request) | - | 禁止 bid_list 通行 |
 | 心跳 | ping(source, request) | ping(request) | |
@@ -110,6 +110,10 @@ class MessagePacket implements Magpie {
 | 数据 | data(target, source, sn, index, count, payload) | data(sn, index, count, payload) | |
 | | copy(magpie, response) | copy(magpie, response) | 应答参数从 magpie 复制 |
 
+> 表格为便于对比的简化签名（先列 bid 角色参数，再列载荷）；完整实现见 3.1 节 Dart 示例（命名参数风格，载荷为第一个参数）。
+>
+> `fail`/`done` 的 `sn`/`index`/`count` 为可选超集（默认 `0/0/1`）：当前系统指令场景 D=0、不携带 sn，服务器校验不锁定 B/D/E，收到时忽略这些字段。
+
 说明：
 
 1. 第一次握手时可填 source 作为预订 bid（可选）；预订失败（被占用/非法/服务器已满）时服务器回复 "FAIL"，由客户端决定重新申请或放弃；
@@ -117,6 +121,51 @@ class MessagePacket implements Magpie {
 3. 系统指令载荷为 JSON 字符串（须含发送方时间戳 "time"），所有指令（含应答）均须携带发送方当前时间戳（秒），不允许为空；
 4. 通配授权（"ACPT *"）与清空通行证（"DENY *"）通过 acpt/deny 的 request 载荷传入通配标记 [1, 2, 3]（严格按序）实现，工厂方法本身不变（见协议文档 6.2）；
 5. DirectPacketFactory 无 acpt/deny/fail/done 工厂方法（这些指令只与服务器通信）。
+
+### 3.0 命令枚举 Command
+
+系统指令的 32 位无符号整数值由可读命令字符串按网络字节序（大端）转换得到（命令定义见协议文档；权威映射见 `design/210-dev-sdk-dart.md` §命令枚举）。工厂方法统一通过下列枚举引用命令；`DATA` 由空 command（C=0）打包，无需枚举值。
+
+| 枚举符号 | 线上命令字符串 | 32 位值（大端） | 标志位 | 说明 |
+|---|---|---|---|---|
+| `Command.SYN` | `"SYN?"` | `0x53594E3F` | A=0, C=1, D=0, E=0 | 第 1 次握手（请求连接） |
+| `Command.SYN_ACK` | `"SYN!"` | `0x53594E21` | A=1, C=1, D=0, E=0 | 第 2 次握手（收到请求） |
+| `Command.ACK` | `"ACK!"` | `0x41434B21` | A=1, C=1, D=0, E=0 | 第 3 次握手（确认连接） |
+| `Command.FAIL` | `"FAIL"` | `0x4641494C` | A=1, C=1 | 失败应答 |
+| `Command.DONE` | `"DONE"` | `0x444F4E45` | A=1, C=1 | 成功应答 |
+| `Command.ACPT` | `"ACPT"` | `0x41435054` | A=0, B=1, C=1, D=0, E=0 | 接受（添加通行证） |
+| `Command.DENY` | `"DENY"` | `0x44454E59` | A=0, B=1, C=1, D=0, E=0 | 拒绝（删除通行证） |
+| `Command.PING` | `"PING"` | `0x50494E47` | A=0, C=1, D=0, E=0 | 发起心跳 |
+| `Command.PONG` | `"PONG"` | `0x504F4E47` | A=1, C=1, D=0, E=0 | 心跳应答 |
+| `Command.FIN` | `"FIN?"` | `0x46494E3F` | A=0, C=1, D=0, E=0 | 第 1 次挥手（请求关闭） |
+| `Command.FIN_ACK` | `"FIN!"` | `0x46494E21` | A=1, C=1, D=0, E=0 | 第 2 次挥手（确认关闭）；枚举名 `FIN_ACK` 对应线上字符串 `"FIN!"` |
+| `Command.NOOP` | `"NOOP"` | `0x4E4F4F50` | A=0, C=1, D=0, E=0 | 无操作 |
+| `Command.COPY` | `"COPY"` | `0x434F5059` | A=1, C=1, D=1 | 确认收到（数据应答包） |
+| —（空 command，C=0） | `""` ≡ `"DATA"` | `0`（字段不存在） | A=0, C=0, D=1 | 普通数据包；`"DATA"` 显式值为 `0x44415441`（A=0, C=1, D=1） |
+
+```dart
+/// System command identifiers; [value] is the big-endian 32-bit integer
+/// packed into the 4-byte command field (C=1). Empty command (C=0) is
+/// represented by value 0 and means "DATA".
+enum Command {
+    SYN(0x53594E3F),
+    SYN_ACK(0x53594E21),
+    ACK(0x41434B21),
+    FAIL(0x4641494C),
+    DONE(0x444F4E45),
+    ACPT(0x41435054),
+    DENY(0x44454E59),
+    PING(0x50494E47),
+    PONG(0x504F4E47),
+    FIN(0x46494E3F),
+    FIN_ACK(0x46494E21),  // wire string "FIN!"
+    NOOP(0x4E4F4F50),
+    COPY(0x434F5059);
+
+    final int value;
+    const Command(this.value);
+}
+```
 
 ### 3.1 BridgePacketFactory 要点（Dart 示例）
 
@@ -271,10 +320,10 @@ bool _constantTimeByteEq(Uint8List a, Uint8List b) {
 收到完整数据包后，按顺序校验，任一失败返回 null：
 
 1. **前 8 字节有效性检查**：
-   - Magic Code；type 标志位（`bid = (type >> 6) & 0x01`）；
+   - Magic Code；读出 type 标志字节（偏移 4）并拆出本地标志位 `ack = (type >> 7) & 0x01`、`bid = (type >> 6) & 0x01`、`cmd = (type >> 5) & 0x01`、`dsn = (type >> 4) & 0x01`；
    - `E = type & 0x07`（bit 3 不检查）：只允许 0~4，5/6/7 为错误包；
    - E>0 时 D 必须为 1（否则错误包）；
-   - headerLength/payloadLength 与 flags 计算一致；
+   - headerLength（偏移 5）/payloadLength（偏移 6..7）与 flags 计算一致；
 2. **头参数有效性检查**：
    - 依次读出 target/source/sn/index/count/command；
    - 若 D=1，则 sn 必须非 0；E>0 时 count 必须 > 1 且 0 <= index < count；
@@ -288,14 +337,27 @@ bool _constantTimeByteEq(Uint8List a, Uint8List b) {
 ```dart
 class BridgePacketFactory {
     Magpie? parse(Uint8List buffer) {
-        if (buffer.length < 8) { ... return null; }
+        if (buffer.length < 8) {
+            assert(false, 'data package error: $buffer');
+            return null;
+        }
         // 1. 前 8 字节有效性检查（见 6.1）
-        //    Magic Code；type 标志位（bid = (type >> 6) & 0x01）；
-        //    E = type & 0x07（bit 3 不检查）：只允许 0~4，5/6/7 为错误包；
-        //    E>0 时 D 必须为 1（否则错误包）；
-        //    headerLength/payloadLength 与 flags 计算一致；
+        //    Magic Code（buffer[0..3] == 'M','P',0,'\1'）；
+        //    读出 type 标志字节（偏移 4；其后偏移 5 为 header_length，偏移 6..7 为 payload_length）
+        //    并拆出本地标志位：
+        int type = buffer[4];
+        int ack = (type >> 7) & 0x01;
+        int bid = (type >> 6) & 0x01;
+        int cmd = (type >> 5) & 0x01;
+        int dsn = (type >> 4) & 0x01;
+        int ext = type & 0x07;
+        int headerLength = buffer[5];
+        int payloadLength = (buffer[6] << 8) | buffer[7];
+        //    E 合法性：E = type & 0x07（bit 3 不检查），只允许 0~4，5/6/7 为错误包；
+        //    E>0 时 D 必须为 1；headerLength/payloadLength 与 flags 计算一致；
         // 2. 头参数有效性检查（见 6.1）
-        //    若 D=1，则 sn 必须非 0；E>0 时 count 必须 > 1 且 0 <= index < count；
+        //    按 flags 依次读出 target/source/sn/index/count/command（本地变量）；
+        //    D=1 时 sn 必须非 0；E>0 时 count 必须 > 1 且 0 <= index < count；
         //    C=1 时 command 必须非 0（不校验是否系统指令，由上层判断）；
         if (bid != 1) {
             assert(false, 'not a bridge packet: ${buffer.length}');
@@ -304,15 +366,39 @@ class BridgePacketFactory {
         // 3. 长度与附加校验码判定
         final size = headerLength + payloadLength;
         final tail = buffer.length - size;
-        if (tail < 0) { ... return null; }           // 连 header+payload 都不够
+        if (tail < 0) {
+            assert(false, 'packet too short: ${buffer.length}');  // 连 header+payload 都不够
+            return null;
+        }
         if (tail == 0) {
             // 桥接包无校验码（握手阶段例外：SYN?/SYN!/基础模式 ACK!/无 secret 的 FAIL，见协议文档 5.1）
-            return BridgePacket(buffer, ...);
+            // TODO: 步骤 1/2 中已拆出的 target/source/sn/index/count/command/payload 按下述签名传入。
+            return BridgePacket(buffer,
+                ack: ack,
+                target: target,
+                source: source,
+                sn: sn,
+                index: index,
+                count: count,
+                command: command,
+                payload: payload,
+            );
         }
         assert(tail == 32);                           // 桥接包 + 32B 校验码
         final attachment = buffer.sublist(size);
         buffer = buffer.sublist(0, size);
-        return ReliablePacket(buffer, ..., attachment: attachment);
+        // TODO: 同上，target/source/sn/index/count/command/payload 由步骤 1/2 读出。
+        return ReliablePacket(buffer,
+            ack: ack,
+            target: target,
+            source: source,
+            sn: sn,
+            index: index,
+            count: count,
+            command: command,
+            payload: payload,
+            attachment: attachment,
+        );
     }
 }
 ```
@@ -322,16 +408,41 @@ class BridgePacketFactory {
 ```dart
 class DirectPacketFactory {
     Magpie? parse(Uint8List buffer) {
-        if (buffer.length < 8) { ... return null; }
+        if (buffer.length < 8) {
+            assert(false, 'data package error: $buffer');
+            return null;
+        }
         // 1/2. 基础校验（见 6.1）
+        //    Magic Code；读出 type 标志字节（偏移 4）并拆出本地标志位：
+        int type = buffer[4];
+        int ack = (type >> 7) & 0x01;
+        int bid = (type >> 6) & 0x01;
+        int cmd = (type >> 5) & 0x01;
+        int dsn = (type >> 4) & 0x01;
+        int ext = type & 0x07;
+        int headerLength = buffer[5];
+        int payloadLength = (buffer[6] << 8) | buffer[7];
+        //    E 合法性、E>0 时 D 必须为 1、头参数越界等校验规则同 6.1；
         if (bid != 0) {
             assert(false, 'not a direct packet: ${buffer.length}');
             return null;
         }
         // 3. 直连包无校验码：差值必须为 0
         final size = headerLength + payloadLength;
-        if (buffer.length != size) { ... return null; }
-        return DirectPacket(buffer, ...);
+        if (buffer.length != size) {
+            assert(false, 'direct packet length mismatch: ${buffer.length} != $size');
+            return null;
+        }
+        // TODO: 步骤 1/2 中已拆出的 ack/sn/index/count/command/payload 按下述签名传入；
+        //       直连包 target/source 恒为 0（B=0，无 bid 字段）。
+        return DirectPacket(buffer,
+            ack: ack,
+            sn: sn,
+            index: index,
+            count: count,
+            command: command,
+            payload: payload,
+        );
     }
 }
 ```

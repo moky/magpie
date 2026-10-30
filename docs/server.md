@@ -329,19 +329,19 @@ AView.accept(A.record);   // 槽主 A 命中 → value |= 1 写回（或 accept(
 
 ## 7. 密钥轮换
 
-- **server_secret**：管理线程每 `server_secret_rotate_interval`（600s）轮换，保留最近 2 把用于 token 校验；
+- **server_secret**：管理线程每 `server_secret_rotate_interval`（600s）轮换；生成新随机密钥后它成为最新密钥，仅保留最近 2 把用于 token 校验——新 token 由最新密钥签发，校验时对保留的密钥逐个重算、任一匹配即通过（新旧次序的存储方式不绑定实现）；
 - **secret**：客户端密钥，record 生命周期内不变；由握手下发，用于所有消息的 HMAC 校验。
 
 ---
 
 ## 8. 应答限频（共享计数器）
 
-对"连接未确认"的 "FAIL" 回复做全局限频：
+对"连接未确认"的 "FAIL" 回复做全局限频，防止伪造 source bid 触发大量应答反射；模型为**可补充的每秒配额桶**（以实现为准：Java `ReplyLimiter`、Python `SharedCounters`，见安全提案"应答计数器"小节）：
 
-- 每收到来源无记录的请求包，累加共享计数器；
-- 按时间分桶（`unconfirmed_reply_buckets`，1024 桶）滑动窗口统计；
-- 超过 `reply_rate_limit`（10/s）不再回复 "FAIL"，静默丢弃；
-- 已绑定客户端的应答不限频。
+- 维护 `unconfirmed_reply_buckets`（默认 1024）个共享配额桶，按 `hash(socket) % 桶数` 定位；
+- 每个桶的配额初始为 `reply_rate_limit`（默认 10 次/秒）；窗口到期时懒刷新——配额重置为 `reply_rate_limit`，刷新时间推后 1 秒；
+- 只有**获准发出的未确认 "FAIL"** 才消耗 1 个配额：配额大于 0 时扣减一格并放行；配额为 0 时本次请求直接静默丢弃、**不消耗配额**（被拒绝的请求不扣减），等待下一个窗口懒刷新补充配额；
+- 已绑定客户端（记录存在且通过校验）的应答不限频；握手阶段 "SYN?"/"ACK!" 不受本计数器限制（分别受 `handshake_min_payload` 等规则约束）。
 
 ---
 
@@ -380,7 +380,7 @@ AView.accept(A.record);   // 槽主 A 命中 → value |= 1 写回（或 accept(
 1. 所有时间值均为**浮点数的秒**（如 0.1 秒），代码内部自行转换为毫秒等内部单位；
 2. 容量类参数均为整数：waiting_queue_size、manager_queue_size、forwarder_queue_size 为任务数（任务即数据包与来源 socket 信息的封装），allowlist_max_entries 为条目数，max_records 为记录总数，socket_buffer_length 为字节数；
 3. 所有键缺失、段缺失或文件缺失时均回退到代码默认值；
-4. `--config` 指定的路径优先于默认路径 `/etc/magpie/config.ini`；`--host`/`--port` 指定时覆盖配置文件同名键（优先级：命令行 > 配置文件 > 默认值）；配置文件不存在时不报错，直接使用全部默认值。
+4. `--config` 指定的路径优先于默认路径 `/etc/magpie/config.ini`；`--host`/`--port` 指定时覆盖配置文件同名键（优先级：命令行 > 配置文件 > 代码默认值）；配置文件不存在时不报错，直接使用全部代码默认值。
 
 ### 9.2 配置示例
 
@@ -436,7 +436,7 @@ java -jar magpie-bridge.jar [--host=<ADDR>] [--port=<NUM>] [--config=<FILE>] [--
 ```
 
 - `--host`：监听地址（缺省用配置文件 `host`，默认 `0.0.0.0`；两版均支持）；
-- `--port`：UDP 监听端口（缺省用配置文件 `port`，默认 `9527`；两版均支持）；`--host`/`--port` 指定时覆盖配置文件同名键（优先级：命令行 > 配置文件 > 默认值）；
+- `--port`：UDP 监听端口（缺省用配置文件 `port`，默认 `9527`；两版均支持）；`--host`/`--port` 指定时覆盖配置文件同名键（优先级：命令行 > 配置文件 > 代码默认值）；
 - `--config`：配置文件路径（缺省尝试默认路径 `/etc/magpie/config.ini`；两版均支持）；
 - `--log-dir`：日志目录（默认为空，不写文件；两版均支持）；
 - 未知参数会打印用法提示并退出；
