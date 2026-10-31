@@ -2,7 +2,7 @@
 
 核心消息接口命名为 `Magpie`，其基类为 `MessagePacket`——网络中传输的每个消息包都是一个 Magpie。消息包分两大类：
 
-- **BridgePacket（桥接包）**：客户端与服务器相互发送的消息包（包括由服务器中转的消息包），须携带附加校验码；
+- **BridgePacket（桥接包）**：客户端与服务器相互发送的消息包（包括由服务器中转的消息包），已建立连接后的业务桥接包携带附加校验码（握手阶段例外：SYN?/SYN!/基础模式 ACK!/无 secret 的 FAIL 无码，见 §6.2）；
 - **DirectPacket（直连包）**：客户端之间直接发送的消息包，不需要校验码（数据合法性由应用层负责）。
 
 本文档合并定义 SDK 全部接口：Magpie/MessagePacket、工厂类（*PacketFactory）、计算公式、附加校验码（sign/verify/ReliablePacket）、解析接口（*PacketFactory.parse），并以 Dart 为例给出实现要点。SDK 包括 Java、Python、Dart 等语言版本，接口一致。
@@ -109,6 +109,7 @@ class MessagePacket implements Magpie {
 | 无操作 | noop(source, request) | noop(request) | 无操作保活（如意外 "FIN!" 后的自愈），无需应答 |
 | 数据 | data(target, source, sn, index, count, payload) | data(sn, index, count, payload) | |
 | | copy(magpie, response) | copy(magpie, response) | 应答参数从 magpie 复制 |
+| | parse(buffer) | parse(buffer) | 校验并析出消息包（见 §6） |
 
 > 表格为便于对比的简化签名（先列 bid 角色参数，再列载荷）；完整实现见 3.1 节 Dart 示例（命名参数风格，载荷为第一个参数）。
 >

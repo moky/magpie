@@ -28,8 +28,9 @@ sequenceDiagram
     C->>S: "SYN?"（载荷≥512B，无校验码）
     S->>S: 生成/复用 bid + secret，计算 token（无状态，不建记录）
     S-->>C: "SYN!"（secret, token, token_time, UDP，无校验码）
+    Note over C,S: 第 2 次握手（服务器下发 secret/token/token_time）
 
-    Note over C,S: 第 2 次握手（客户端原样回传 3 参数）
+    Note over C,S: 第 3 次握手（客户端原样回传 3 参数）
     C->>S: "ACK!"（source=bid，回传 secret/token/token_time，无校验码）
     S->>S: token 校验通过 → 创建 bid record（bid/socket 双索引）
     Note over C,S: 连接建立，可开始转发
@@ -62,7 +63,17 @@ sequenceDiagram
 - 非加密/加密切换由 `app_secret_file` 状态自动决定（未配置/文件缺失/enigmas 为空 → 非加密）；
 - 密钥重载：管理线程每 `app_secret_reload_interval`（600s）重读文件，失败保留旧表。
 
-### 2.3 握手失败
+### 2.3 直连握手（B=0）
+
+客户端之间直连（B=0，协议头不含 bid 字段）同样走三次握手，但不经服务器、无 secret/token：
+
+1. 客户端 A 发送 "SYN?" 表示想建立连接；
+2. 客户端 B 收到后回复 "SYN!"；
+3. A 收到后发送 "ACK!"，双方各自在本地标注连接已建立（各管理一条"有向管道"）。
+
+无需校验码（直连包由应用层保证数据合法性）；不涉及服务器分配 bid 与 token 计算。
+
+### 2.4 握手失败
 
 | 场景 | 服务器动作 |
 |------|-----------|
@@ -91,6 +102,7 @@ sequenceDiagram
 - offline == true 期间仅 "SYN?"/"ACK!"/"FIN?"/"NOOP" 放行，其余指令（含 "PING"、数据包）一律静默丢弃、不更新 last_time；
 - 客户端意外断线（未发 "FIN?"）由心跳感知：服务器 `T_active`（60s）内无活动即按离线处理（转发回复 "FAIL" 通知发送方）；
 - 记录仍保留 24h（`record_expires`），期间客户端可重新握手复用原 bid/secret（"ACK!" 幂等分支）。
+- **直连挥手（B=0）**：客户端之间直连断开同样为 "FIN?" / "FIN!" 两步、不经服务器；免疫窗口、offline 标记、记录回收等均为服务器 bid 记录概念，不适用于直连。双向各管理一条有向管道：任一方主动关闭自己这一侧管道后，另一侧再主动发起反方向的管道关闭（语义上对应 TCP 四次挥手，详见设计文档 120 挥手章节）。
 
 ### 3.1 意外 "FIN!" 自愈
 
@@ -262,13 +274,13 @@ sequenceDiagram
     participant S as 服务器
 
     Note over C: 距上次收/发 > H（默认 10s）→ 空闲触发
-    C->>S: "PING"（或 "NOOP"，带校验码）
+    C->>S: "PING"（带校验码）
     S->>S: 更新 record.last_time
     S-->>C: "PONG"
     Note over C,S: 服务器 60s（T_active）无活动 → 按离线处理；24h 无活动 → 记录回收
 ```
 
-- "PING" 与 "NOOP" 都可保活并刷新 last_time；"NOOP" 额外刷新 last_noop_time（免疫窗口）；
+- "PING" 与 "NOOP" 都会更新 last_time；"NOOP" 额外刷新 last_noop_time（免疫窗口），但 "NOOP" 不是空闲心跳（见 3 节），空闲保活仅由 "PING" 触发；
 - 保活依赖上行 "PING" 本身（NAT 映射计时器被重置），"PONG" 丢失不影响保活，不重发；
 - 客户端断线判定：距最后一次**收到**对端数据包超过 D（默认 6×H = 60 秒）；
 - 服务器不主动检测离线，靠 `T_active` 判定；转发遇到超时目标回复 "FAIL" 通知发送方；

@@ -45,7 +45,8 @@ verify = HMAC-SHA256(secret, header + payload)
 
 - **直连包（B=0）不需要校验码**（数据合法性由应用层负责）；
 - 转发包经服务器时，服务器用**接收方**的 secret 重新签名后转发，接收方据此确认"消息由服务器转发，来源 bid 可信"；
-- 校验失败一律**静默丢弃、不应答**（避免给攻击者反馈）。
+- 校验失败一律**静默丢弃、不应答**（避免给攻击者反馈）；
+- HMAC 校验码比对使用**常量时间比较**（防时序侧信道）；
 
 ### 3.1 例外（握手阶段）
 
@@ -108,6 +109,8 @@ sequenceDiagram
     M->>M: 全部通过 → 创建 bid record（secret = 解密明文）
 ```
 
+**加密模式 "SYN?" 前置校验**：载荷缺 "enigmas" 字段，或上报键与本地映射表交集为空 → 静默丢弃、不应答；通过后才进入取交集选密钥、加密 secret 的流程。
+
 **服务器验证 "ACK!" 四步**（任一失败静默丢弃）：
 
 1. "enigma" 字段不存在或其 "key" 与本地映射表无对应值 → 丢弃；
@@ -134,7 +137,7 @@ sequenceDiagram
 - 伪造源 IP 无法完成注册——"SYN!"（secret/token 在其中下发）发往伪造的源地址，攻击者收不到应答；
 - 攻击者只知道自己记录的 secret，不知道其他用户的 secret，无法冒充他人 bid 发言；
 - 僵尸记录无通信对象：与真实用户通信须双方通行证且对方知晓其 bid，业务上无意义；
-- 内存占用受 `max_records`（记录总数上限，默认 65536）控制：新建握手将创建记录时已达上限回 "FAIL"，配合 `record_expires`（24h 回收）控制，无法无限膨胀；
+- 内存占用受 `max_records`（记录总数上限，默认 65536）控制：新建握手将创建记录时已达上限回 "FAIL"（仅内定流程即 loopback 豁免），配合 `record_expires`（24h 回收）控制，无法无限膨胀；
 - 加密模式下 "ACK!" 必须带校验码，进一步杜绝"只注册不持有密钥"的僵尸。
 
 ### 5.3 伪造"FIN?"（恶意踢人）
@@ -303,7 +306,7 @@ bid 与 socket 绑定（socket 即身份，见架构文档）；若某 record �
 |--------|--------|------|
 | handshake_min_payload | 512 | 握手上行包最小载荷（防放大） |
 | handshake_token_timeout | 60.0s | "ACK!" token_time 有效窗口；超时静默丢弃、不创建记录（防重放/陈旧握手包） |
-| unconfirmed_reply_buckets | 1024 | 共享计数器时间分桶数 |
+| unconfirmed_reply_buckets | 1024 | 共享配额桶数（按 hash(socket) % U 定位） |
 | reply_rate_limit | 10/s | 未确认来源的 "FAIL" 应答限频 |
 | allowlist_max_entries | 256 | 每条记录通行证列表上限（槽区长度 = 值 × 8 字节，IPv4/IPv6 槽同格式） |
 | max_records | 65536 | 内存记录总数上限（新建握手将创建记录时已达上限回 "FAIL"，仅内定流程豁免） |
@@ -311,6 +314,6 @@ bid 与 socket 绑定（socket 即身份，见架构文档）；若某 record �
 | record_active_timeout | 60.0s | 在线判定窗口；紧急自救回收时效逐轮减半的下限 |
 | record_recycle_interval | 600.0s（10 min） | 两次 purge 扫描之间的最小间隔 |
 | noop_immunity_window | 2.0s | "NOOP" 免疫窗口（防 "FIN?" 踢人；窗口内应答但不标记 offline） |
-| server_secret_rotate_interval | 600s | 服务器密钥轮换周期 |
+| server_secret_rotate_interval | 600.0s | 服务器密钥轮换周期 |
 | app_secret_file | （空） | 应用密钥文件路径，配置示例 `# app_secret_file = /etc/magpie/private/enigma.json` |
-| app_secret_reload_interval | 600s | 应用密钥重读周期 |
+| app_secret_reload_interval | 600.0s | 应用密钥重读周期 |

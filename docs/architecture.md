@@ -29,8 +29,8 @@ Magpie Bridge 采用 **N:1 的客户端-服务器（C-S）拓扑**。服务器�
 
 - 系统指令（D=0）不携带 sn，应答靠 **socket 配对**：从哪个 socket 收到请求，就回哪个 socket；source bid 不决定应答发给谁，仅用于身份校验（验证 bid 与 socket 的绑定关系）；
 - 数据包（D=1）：直连（B=0）收件人即对方 socket；桥接（B=1）收件人由 target bid 指定；"COPY" 应答均靠 sn + index 配对；
-- 服务器收到 target/source 全非 0 的包才认为是转发包，查询两个 bid 均正确（且两者不等）后，原样转发到 target 对应的 socket；
-- source bid 为 0 的包只可能是服务器下发的（客户端伪造会被判定为上行校验违规而丢弃）。
+- 服务器收到 target/source 全非 0 的包才认为是转发包，查询两个 bid 均正确（且两者不等）后，原样转发到 target 对应的 socket（载荷正文保持原样，尾部附加校验码以接收方 secret 重签替换，见 7.2）；
+- 除 "SYN?" 上行例外外，source bid 为 0 的包只可能是服务器下发的（客户端伪造会被判定为上行校验违规而丢弃）。
 
 ---
 
@@ -99,7 +99,7 @@ flowchart TD
    - 除此以外必须 source > 0；
    - "ACK!" → 第三次握手（无状态令牌验证）；
    - **来源检查**：按来源 socket 查询分配表——记录不存在则按"连接未确认"处理（回复 "FAIL" 受共享计数器限频，见安全文档）；socket 记录存在则校验 source bid 与记录一致（不一致 = 伪造来源丢弃）；
-   - **附加校验**：除 SYN?/ACK! 外均须通过 HMAC 校验码验证，失败即丢弃；
+   - **附加校验**：除 SYN? 与**基础模式** ACK! 外均须通过 HMAC 校验码验证，失败即丢弃（加密模式 ACK! 必须携带，见安全文档 3.1 / 协议文档 5.1；比对使用常量时间比较，防时序侧信道，见安全文档 3 节）；
    - **离线分流**：记录 offline == true 且 command 不属于 "FIN?"/"NOOP"（"SYN?"/"ACK!" 已在前面处理）→ 静默丢弃、不更新活跃时间；
    - 来源检查、附加校验与离线分流全部通过后才更新活跃时间；
    - **指令集过滤**：最后检查 command 是否属于支持的系统指令，未知指令直接丢弃；
@@ -117,7 +117,7 @@ flowchart TD
 
 1. 轮询辖下 source bid，取队首任务（全空则 sleep 后继续）；
 2. **来源检查**：记录不存在 → "连接未确认"处理（回复 "FAIL" 受限频）后丢弃；socket 匹配但 source bid 与记录不一致 → 伪造来源，丢弃；
-3. **附加校验**：对带校验码的数据包用 `record.secret` 验证，失败即丢弃；
+3. **附加校验**：对带校验码的数据包用 `record.secret` 验证 HMAC-SHA256（**常量时间比较**，防时序侧信道，见安全文档 3 节），失败即丢弃；
 4. **离线分流**：记录 offline == true → 静默丢弃（不更新活跃时间）；
 5. 以上检查全部通过后更新活跃时间；
 6. **目标检查**：target bid 记录不存在 → 伪造包，静默丢弃；
@@ -156,7 +156,7 @@ bid 与 socket 信息**一一对应**：一个 bid 任何时候只会成功分�
 - bid、key、socket、secret 均为**不变量**，记录一经创建永不改变；
 - socket 与记录绑定后**不可迁移**至其他 socket，来源 socket 不匹配一律按冲突/伪造处理；
 - 每次收到有效数据包都更新 last_time（仅管理线程与转发线程更新，预处理线程不查表）；
-- offline 由 "FIN?" 设置（`noop_immunity_window` 内不设置，见安全文档），由 "ACK!" 幂等分支或 "NOOP" 清除；offline == true 期间仅 "SYN?"/"ACK!"/"FIN?"/"NOOP" 放行，其余指令（含 "PING"、数据包）一律静默丢弃、不更新 last_time。
+- offline 由 "FIN?" 设置（`noop_immunity_window` 窗口内不设置，默认 2.0s，见安全文档），由 "ACK!" 幂等分支或 "NOOP" 清除；offline == true 期间仅 "SYN?"/"ACK!"/"FIN?"/"NOOP" 放行，其余指令（含 "PING"、数据包）一律静默丢弃、不更新 last_time。
 
 ### 6.2 bid 生成规则
 
@@ -196,7 +196,7 @@ bid 为 32 位无符号整数，采用**全随机**方式生成：在 `0x0001000
 6. 取最新 server_secret 计算 HMAC-SHA256，Base64 编码
 ```
 
-**Token 校验**：取协议头 source bid、观察到的 socket、载荷 "secret" 与 "token_time"，重算并逐个与全部服务器密钥（最多 2 个）比对，任一匹配即通过。
+**Token 校验**：取协议头 source bid、观察到的 socket、载荷 "secret" 与 "token_time"，重算并逐个与全部服务器密钥（最多 2 个）比对，任一匹配即通过；`token_time` 须在 `handshake_token_timeout`（默认 60s）有效窗口内，超时静默丢弃、不创建记录（防重放/陈旧握手包，见安全文档 4.2）。
 
 ---
 
@@ -210,14 +210,15 @@ sequenceDiagram
     participant P as 预处理线程
     participant M as 管理线程
 
+    Note over C,M: 基础模式；加密模式流程见 workflow §2.2 / protocol §7
     C->>P: "SYN?"（source=0 或预订 bid，载荷≥512B）
     P->>M: target=0 → 管理请求队列
     M->>M: 分配/复用/内定/预订 bid + 生成 secret + 计算 token
     M-->>C: "SYN!"（target=新 bid，载荷含 secret/token/token_time）
     C->>C: 保存 secret
-    C->>P: "ACK!"（source=新 bid，原样回传 3 参数）
+    C->>P: "ACK!"（source=新 bid；基础模式原样回传 3 参数，加密模式回传 enigma 参数 + 密文 secret + 校验码）
     P->>M: 管理请求队列
-    M->>M: token 校验 → 创建 bid record（两套索引）
+    M->>M: token 校验（token_time 超时静默丢弃）→ 创建 bid record（两套索引）
     M-->>C: （连接建立，可开始转发）
 ```
 

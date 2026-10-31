@@ -19,7 +19,7 @@ Record 属性：
 
 1. 其中 bid、key、socket 和 secret 均为**不变量**，记录一经创建永不改变（socket 与记录绑定后不可迁移至其他 socket，来源 socket 不匹配一律按冲突/伪造处理）；
 2. 每次收到有效数据包时都需要更新 last_time；
-3. 离线标志 offline 由 "FIN?" 设置（`noop_immunity_window` 内不设置，见安全提案），由 "ACK!" 幂等分支（重新握手走完第三次握手）或 "NOOP" 清除；offline == true 期间仅 "SYN?"/"ACK!"/"FIN?"/"NOOP" 放行，其余指令（含 "PING"、数据包）一律静默丢弃，不更新 last_time；
+3. 离线标志 offline 由 "FIN?" 设置（`noop_immunity_window` 窗口内不设置，默认 2.0s，见安全提案），由 "ACK!" 幂等分支（重新握手走完第三次握手）或 "NOOP" 清除；offline == true 期间仅 "SYN?"/"ACK!"/"FIN?"/"NOOP" 放行，其余指令（含 "PING"、数据包）一律静默丢弃，不更新 last_time；
 4. 通行证列表 allowlist 由 ACPT/DENY 指令维护，通过"通行证"小节的封装接口访问（不得直接读写字段）；条目上限为 `allowlist_max_entries`（默认 256 个，具体实现见服务器文档）。
 5. 内存记录总数设有上限 `max_records`（默认 65536，见服务器文档配置表）：新建 bid record 时若已达上限则回复 "FAIL" 指令包、不创建记录（"SYN?" 分配阶段提前检查、"ACK!" 创建前兜底检查；仅 loopback 内定流程豁免）；已存在的记录不受影响（复用/重握手正常）。
 
