@@ -108,7 +108,7 @@ stateDiagram-v2
 
 - **Mini 包（A=0, D=1, E=0）**：先回 "COPY" → 查 received_sn_set，sn 已存在则丢弃；否则标记并回调 payload；
 - **分包包（A=0, D=1, E>0）**：先回 "COPY" → sn 已收完整则丢弃；否则按 index 存入 receiving_table 对应列表（同 index 重复覆盖），填满后并包回调、从 receiving_table 删除该 sn 并标记 received_sn_set；
-- **接收表清理**：receiving_table 中未收满的列表驻留超过 T2（接收超时，默认 30 秒）删除（可选回调"接收失败"）；received_sn_set 仅保留最近 N 个 sn（如 1024），防止无限增长。
+- **接收表清理**：receiving_table 中未收满的列表驻留超过 T2（接收超时，默认 30 秒，须大于重传窗口 R×T=6s 并留链路余量）删除（可选回调"接收失败"）；received_sn_set 仅保留最近 N 个 sn（如 1024），防止无限增长。
 
 ### 4.3 失败应答 "FAIL"
 

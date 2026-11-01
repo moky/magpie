@@ -520,12 +520,14 @@ Command 与标志位组合定义各类消息包：
 
 ```json
 {
-    "enigmas": {
-        "123456": "hex,1234567890ABCDEF",
-        "ACCEDE": "hex,ACCEDE1234567890",
-        "DECADE": "hex,DECADE1234567890",
-        "FACADE": "hex,FACADE1234567890",
-        "TW9reS": "base64,TW9reSBsb3ZlcyBNYXkgTGVlIGZvcmV2ZXIh"
+    "enigma": {
+        "secrets": {
+            "123456": "hex,1234567890ABCDEF",
+            "ACCEDE": "hex,ACCEDE1234567890",
+            "DECADE": "hex,DECADE1234567890",
+            "FACADE": "hex,FACADE1234567890",
+            "TW9reS": "base64,TW9reSBsb3ZlcyBNYXkgTGVlIGZvcmV2ZXIh"
+        }
     }
 }
 ```
@@ -534,7 +536,7 @@ Command 与标志位组合定义各类消息包：
 
 ### 7.2 模式判定
 
-服务器配置项 `app_secret_file` 未设置、值为空、文件不存在、文件无法解析、或文件内 `enigmas` 映射表缺失/为空时，服务器运行于**非加密模式**（基础握手）；映射表非空则切换为**加密模式**，握手过程强制对 "secret" 加密。
+服务器配置项 `app_secret_file` 未设置、值为空、文件不存在、文件无法解析、或文件内 `secrets` 映射表缺失/为空时，服务器运行于**非加密模式**（基础握手）；映射表非空则切换为**加密模式**，握手过程强制对 "secret" 加密。
 
 运行期间由管理线程按 `app_secret_reload_interval`（默认 600 秒）周期重读密钥文件：解析成功则整体替换内存映射表（密钥轮换/吊销据此生效，空表按上述规则切换为非加密模式）；重读失败或文件消失则保留旧表继续运行（不降级、不中断）。
 

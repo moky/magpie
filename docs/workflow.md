@@ -42,7 +42,7 @@ sequenceDiagram
 
 ### 2.2 加密握手（Enigma）
 
-服务器配置了应用密钥文件（`app_secret_file` 且 `enigmas` 非空）时进入加密模式：secret 以 AES-256-GCM 加密下发，链路嗅探者无法获取明文。
+服务器配置了应用密钥文件（`app_secret_file` 且 `secrets` 非空）时进入加密模式：secret 以 AES-256-GCM 加密下发，链路嗅探者无法获取明文。
 
 ```mermaid
 sequenceDiagram
@@ -60,7 +60,7 @@ sequenceDiagram
 ```
 
 - 基础模式 "ACK!" 不带校验码；加密模式 "ACK!" **必须带**（证明持有 secret，防僵尸注册）；
-- 非加密/加密切换由 `app_secret_file` 状态自动决定（未配置/文件缺失/enigmas 为空 → 非加密）；
+- 非加密/加密切换由 `app_secret_file` 状态自动决定（未配置/文件缺失/secrets 为空 → 非加密）；
 - 密钥重载：管理线程每 `app_secret_reload_interval`（600s）重读文件，失败保留旧表。
 
 ### 2.3 直连握手（B=0）
@@ -100,8 +100,8 @@ sequenceDiagram
 
 - "FIN?" 免疫窗口外到达即标记 offline（不需要第二个包确认）；**免疫窗口内仅应答 "FIN!"、不修改 offline**（见安全文档）；记录创建后从未发送过 NOOP 时，`last_noop_time` 视为已超出免疫窗口，"FIN?" 不受免疫保护；
 - offline == true 期间仅 "SYN?"/"ACK!"/"FIN?"/"NOOP" 放行，其余指令（含 "PING"、数据包）一律静默丢弃、不更新 last_time；
-- 客户端意外断线（未发 "FIN?"）由心跳感知：服务器 `T_active`（60s）内无活动即按离线处理（转发回复 "FAIL" 通知发送方）；
-- 记录仍保留 24h（`record_expires`），期间客户端可重新握手复用原 bid/secret（"ACK!" 幂等分支）。
+- 客户端意外断线（未发 "FIN?"）由心跳感知：服务器 `T_active`（60s，即配置键 `record_active_timeout`）内无活动即按离线处理（转发回复 "FAIL" 通知发送方）；
+- 记录仍保留 24h（`record_expires`），期间客户端可重新握手复用原 bid/secret（"ACK!" 幂等分支）；过期后由 purge 周期（`record_recycle_interval`，默认 600s）回收。
 - **直连挥手（B=0）**：客户端之间直连断开同样为 "FIN?" / "FIN!" 两步、不经服务器；免疫窗口、offline 标记、记录回收等均为服务器 bid 记录概念，不适用于直连。双向各管理一条有向管道：任一方主动关闭自己这一侧管道后，另一侧再主动发起反方向的管道关闭（语义上对应 TCP 四次挥手，详见设计文档 120 挥手章节）。
 
 ### 3.1 意外 "FIN!" 自愈

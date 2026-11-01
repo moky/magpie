@@ -1,11 +1,11 @@
 # Magpie Bridge SDK
 
-核心消息接口命名为 `Magpie`，其基类为 `MessagePacket`——网络中传输的每个消息包都是一个 Magpie。消息包分两大类：
+核心消息接口命名为 `Magpie`，其基础实现为 `MessagePacket`——网络中传输的每个消息包都是一个 Magpie。消息包分两大类：
 
 - **BridgePacket（桥接包）**：客户端与服务器相互发送的消息包（包括由服务器中转的消息包），已建立连接后的业务桥接包携带附加校验码（握手阶段例外：SYN?/SYN!/基础模式 ACK!/无 secret 的 FAIL 无码，见 §6.2）；
 - **DirectPacket（直连包）**：客户端之间直接发送的消息包，不需要校验码（数据合法性由应用层负责）。
 
-本文档合并定义 SDK 全部接口：Magpie/MessagePacket、工厂类（*PacketFactory）、计算公式、附加校验码（sign/verify/ReliablePacket）、解析接口（*PacketFactory.parse），并以 Dart 为例给出实现要点。SDK 包括 Java、Python、Dart 等语言版本，接口一致。
+本文档合并定义 SDK 全部接口：Magpie/Packet 双接口、内部实现 MessagePacket、代理基类 BasePacket、工厂类（*PacketFactory）、计算公式、附加校验码（sign/verify/ReliablePacket）、解析接口（*PacketFactory.parse），并以 Dart 为例给出实现要点。SDK 包括 Java、Python、Dart 等语言版本，接口一致。
 
 ---
 
@@ -26,13 +26,12 @@
 
 ---
 
-## 2. 消息包基类 MessagePacket
+## 2. 内部实现类 MessagePacket
 
-实现一切消息包的基础属性与方法。所有属性只读。
+实现一切消息包的基础属性与方法（`implements Magpie, Packet`；Packet 为包头参数接口，即下表 ack/bid/cmd/dsn/ext/headerLength/payloadLength）。所有属性只读。
 
 | 成员 | 说明 |
 |------|------|
-| version | 协议版本，固定 "1.0"（仅 SDK 侧元数据，不序列化进 8–32 字节协议头；线上协议头只携带 Magic Code `MP\0\1`） |
 | ack | 应答标志位（0/1） |
 | bid | 桥接标志位（0/1） |
 | cmd | 命令标志位（0/1，普通数据包默认 0） |
@@ -40,15 +39,9 @@
 | ext | 额外参数长度；解包 E = type & 0x07（低 3 位）允许 0~4；打包为字节对齐仅取 0/2/4 |
 | headerLength | 协议头长度（8 ~ 32） |
 | payloadLength | 载荷长度（0 ~ 1024，**发送端构造约束**；解析端不以此拒绝，只校验 MSS） |
-| isAck() | 是否为应答包 |
-| hasBid() | 是否包含 bid（与服务器通信） |
-| hasCmd() | 是否包含命令（普通数据包默认 false） |
-| hasDsn() | 是否包含数据序列号 |
-| hasExt() | 是否包含额外分包参数 |
-| copy() | 复制当前消息包（不携带 attachment） |
 
 ```dart
-class MessagePacket implements Magpie {
+class MessagePacket implements Magpie, Packet {
     MessagePacket(this._buffer, {
         required this.ack,
         required this.bid,
@@ -142,29 +135,43 @@ class MessagePacket implements Magpie {
 | `Command.FIN_ACK` | `"FIN!"` | `0x46494E21` | A=1, C=1, D=0, E=0 | 第 2 次挥手（确认关闭）；枚举名 `FIN_ACK` 对应线上字符串 `"FIN!"` |
 | `Command.NOOP` | `"NOOP"` | `0x4E4F4F50` | A=0, C=1, D=0, E=0 | 无操作 |
 | `Command.COPY` | `"COPY"` | `0x434F5059` | A=1, C=1, D=1 | 确认收到（数据应答包） |
-| —（空 command，C=0） | `""` ≡ `"DATA"` | `0`（字段不存在） | A=0, C=0, D=1 | 普通数据包；`"DATA"` 显式值为 `0x44415441`（A=0, C=1, D=1） |
+| `Command.EMPTY` | `""` ≡ `"DATA"` | `0` | A=0, C=0, D=1 | 普通数据包；`"DATA"` 显式值为 `0x44415441`（A=0, C=1, D=1） |
 
 ```dart
 /// System command identifiers; [value] is the big-endian 32-bit integer
 /// packed into the 4-byte command field (C=1). Empty command (C=0) is
 /// represented by value 0 and means "DATA".
-enum Command {
-    SYN(0x53594E3F),
-    SYN_ACK(0x53594E21),
-    ACK(0x41434B21),
-    FAIL(0x4641494C),
-    DONE(0x444F4E45),
-    ACPT(0x41435054),
-    DENY(0x44454E59),
-    PING(0x50494E47),
-    PONG(0x504F4E47),
-    FIN(0x46494E3F),
-    FIN_ACK(0x46494E21),  // wire string "FIN!"
-    NOOP(0x4E4F4F50),
-    COPY(0x434F5059);
+class Command {
+  Command._();
 
-    final int value;
-    const Command(this.value);
+  /// Handshake
+  static const SYN     = 0x53594E3F; // "SYN?"
+  static const SYN_ACK = 0x53594E21; // "SYN!"
+  static const ACK     = 0x41434B21; // "ACK!"
+
+  /// Result
+  static const FAIL    = 0x4641494C; // "FAIL"
+  static const DONE    = 0x444F4E45; // "DONE"
+
+  /// Permit
+  static const ACPT    = 0x41435054; // "ACPT"
+  static const DENY    = 0x44454E59; // "DENY"
+
+  /// Heartbeat
+  static const PING    = 0x50494E47; // "PING"
+  static const PONG    = 0x504F4E47; // "PONG"
+
+  /// Shutdown
+  static const FIN     = 0x46494E3F; // "FIN?"
+  static const FIN_ACK = 0x46494E21; // "FIN!"
+
+  static const NOOP    = 0x4E4F4F50; // "NOOP"
+
+  /// Data
+  static const DATA    = 0x44415441; // "DATA"
+  static const COPY    = 0x434F5059; // "COPY"
+
+  static const EMPTY   = 0x00000000; // empty command: C=0, same meaning as "DATA"
 }
 ```
 
@@ -196,7 +203,7 @@ class BridgePacketFactory {
     BridgePacket finAck(Magpie packet, [Uint8List? response]) => ...;
     BridgePacket copy(Magpie packet, [Uint8List? response]) => ...;
 
-    /// 普通数据包：command = 0（空 command 打包，控制体积）
+    /// 普通数据包：command = Command.EMPTY（空 command 打包，控制体积）
     BridgePacket data(Uint8List data, {
         required int target, required int source,
         required int sn, required int index, required int count,
@@ -256,20 +263,26 @@ Uint8List hmacSha256({required Uint8List secret, required Uint8List message}) {
 }
 ```
 
-### 5.2 签名（BridgePacket.sign）
+### 5.2 签名（BasePacket.sign）
 
-只升级 BridgePacket（直连包不需要 verify）：
+sign() 定义在代理基类 BasePacket 上，BridgePacket/DirectPacket 均继承（直连包签名为保留能力，由应用层决定是否需要）：
 
 ```dart
-class BridgePacket extends MessagePacket {
+class BasePacket implements Magpie, Packet {
+    BasePacket(this._packet);
+
+    /// the inner packet
+    final Packet _packet;
+
+    @override
+    Uint8List pack() => _packet.pack();
+
     /// 对 (header + payload) 计算 HMAC-SHA256，返回带校验码的包
     ReliablePacket sign(Uint8List secret) {
-        // 1. 先剔除原 attachment（如果有），再打包为二进制（有缓存直接复用）
-        final data = copy().pack();
-        // 2. HMAC-SHA256
-        final verify = hmacSha256(secret: secret, message: data);
-        // 3. 返回带签名的包
-        return ReliablePacket(data, ..., attachment: verify);
+        // pack() 只含 header + payload；attachment 单独存放
+        final base = _packet.pack();
+        final digest = hmacSha256(secret: secret, message: base);
+        return ReliablePacket(_packet, digest);
     }
 }
 ```
@@ -277,23 +290,30 @@ class BridgePacket extends MessagePacket {
 ### 5.3 带校验码子类 ReliablePacket
 
 ```dart
-class ReliablePacket extends BridgePacket {
-    ReliablePacket(Uint8List? buffer, {
-        required super.ack, ..., required super.payload,
-        required this.attachment,
-    }) : super(buffer);
+class ReliablePacket extends BasePacket {
+    ReliablePacket(super._packet, this.attachment);
 
-    /// verify（32 字节 HMAC-SHA256）
-    final Uint8List? attachment;
+    /// 32 字节 HMAC-SHA256 摘要
+    final Uint8List attachment;
+
+    @override
+    Uint8List pack() {
+        // 报文 + attachment 拼接
+        final base = _packet.pack();
+        final merged = Uint8List(base.length + attachment.length);
+        merged.setRange(0, base.length, base);
+        merged.setRange(base.length, merged.length, attachment);
+        return merged;
+    }
 
     bool verify(Uint8List secret) {
         final digest = attachment;
-        if (digest == null || digest.length != 32) return false;
+        if (digest.length != 32) return false;   // ATTACHMENT_LENGTH
         if (secret.isEmpty) return false;
-        // 1. 打包原始报文（已剔除 attachment，与 sign 时的 data 一致）
-        final data = copy().pack();
+        // 1. 重新打包原始报文（header + payload，与 sign 时的 base 一致）
+        final base = _packet.pack();
         // 2. HMAC-SHA256
-        final computed = hmacSha256(secret: secret, message: data);
+        final computed = hmacSha256(secret: secret, message: base);
         // 3. 常量时间对比，防计时攻击（禁止直接 == 比较）
         return _constantTimeByteEq(digest, computed);
     }
@@ -374,8 +394,14 @@ class BridgePacketFactory {
         if (tail == 0) {
             // 桥接包无校验码（握手阶段例外：SYN?/SYN!/基础模式 ACK!/无 secret 的 FAIL，见协议文档 5.1）
             // TODO: 步骤 1/2 中已拆出的 target/source/sn/index/count/command/payload 按下述签名传入。
-            return BridgePacket(buffer,
+            return BridgePacket(MessagePacket(buffer,
                 ack: ack,
+                bid: 1,
+                cmd: cmd,
+                dsn: dsn,
+                ext: ext,
+                headerLength: headerLength,
+                payloadLength: payloadLength,
                 target: target,
                 source: source,
                 sn: sn,
@@ -383,14 +409,20 @@ class BridgePacketFactory {
                 count: count,
                 command: command,
                 payload: payload,
-            );
+            ));
         }
         assert(tail == 32);                           // 桥接包 + 32B 校验码
         final attachment = buffer.sublist(size);
         buffer = buffer.sublist(0, size);
         // TODO: 同上，target/source/sn/index/count/command/payload 由步骤 1/2 读出。
-        return ReliablePacket(buffer,
+        return ReliablePacket(MessagePacket(buffer,
             ack: ack,
+            bid: 1,
+            cmd: cmd,
+            dsn: dsn,
+            ext: ext,
+            headerLength: headerLength,
+            payloadLength: payloadLength,
             target: target,
             source: source,
             sn: sn,
@@ -398,8 +430,7 @@ class BridgePacketFactory {
             count: count,
             command: command,
             payload: payload,
-            attachment: attachment,
-        );
+        ), attachment);
     }
 }
 ```
@@ -436,14 +467,22 @@ class DirectPacketFactory {
         }
         // TODO: 步骤 1/2 中已拆出的 ack/sn/index/count/command/payload 按下述签名传入；
         //       直连包 target/source 恒为 0（B=0，无 bid 字段）。
-        return DirectPacket(buffer,
+        return DirectPacket(MessagePacket(buffer,
             ack: ack,
+            bid: 0,
+            cmd: cmd,
+            dsn: dsn,
+            ext: ext,
+            headerLength: headerLength,
+            payloadLength: payloadLength,
+            target: 0,
+            source: 0,
             sn: sn,
             index: index,
             count: count,
             command: command,
             payload: payload,
-        );
+        ));
     }
 }
 ```

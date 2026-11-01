@@ -34,12 +34,14 @@
 
 ```json
 {
-    "enigmas": {
-        "123456": "hex,1234567890ABCDEF",
-        "ACCEDE": "hex,ACCEDE1234567890",
-        "DECADE": "hex,DECADE1234567890",
-        "FACADE": "hex,FACADE1234567890",
-        "TW9reS": "base64,TW9reSBsb3ZlcyBNYXkgTGVlIGZvcmV2ZXIh"
+    "enigma": {
+        "secrets": {
+            "123456": "hex,1234567890ABCDEF",
+            "ACCEDE": "hex,ACCEDE1234567890",
+            "DECADE": "hex,DECADE1234567890",
+            "FACADE": "hex,FACADE1234567890",
+            "TW9reS": "base64,TW9reSBsb3ZlcyBNYXkgTGVlIGZvcmV2ZXIh"
+        }
     }
 }
 ```
@@ -49,7 +51,7 @@
 
 ### 第一次握手包 "SYN?" 升级（客户端）
 
-客户端启动时，从本地读取应用密钥 enigmas 映射表（文件格式如上）。
+客户端启动时，从本地读取应用密钥 secrets 映射表（文件格式如上）。
 
 开始握手前，先取出映射表中的所有 keys，放进 "SYN?" 的载荷中发给服务器。
 
@@ -74,7 +76,7 @@
 ### 第二次握手包 "SYN!" 升级（服务器）
 
 服务器从配置项 `app_secret_file` 读取应用密钥文件路径；
-配置项未设置、文件不存在、文件无法解析、或文件内 `enigmas` 映射表缺失/为空时，服务器按**非加密模式**运行；
+配置项未设置、文件不存在、文件无法解析、或文件内 `secrets` 映射表缺失/为空时，服务器按**非加密模式**运行；
 否则（映射表非空）切换为**加密模式**，即握手过程强制升级为对 "secret" 进行加密。
 
 运行期间由**管理线程**按配置项 `app_secret_reload_interval`（默认 600 秒，即 10 分钟）周期重读该文件：解析成功则整体替换内存映射表（密钥轮换/吊销据此生效，空表按上述规则切换为非加密模式）；重读失败或文件消失则保留旧表继续运行（不降级、不中断）。

@@ -190,7 +190,7 @@ noop_immunity_window = 2.0
 server_secret_rotate_interval = 600.0
 # app secret (enigma) file: path to the application-secret JSON file
 # (see the "enigma" MIP). When unset or empty, the file is missing,
-# unparsable, or its "enigmas" map is empty, the server runs in
+# unparsable, or its "secrets" map is empty, the server runs in
 # non-encrypted mode (default: unset; uncomment the example below or
 # set this value to enable)
 # app_secret_file = /etc/magpie/private/enigma.json

@@ -2,16 +2,75 @@
 
 由于 Dart 语言对函数变量、空安全等特性更丰富，所以这里以 Dart 语言举例。
 
+## 命令枚举 Command
+
+系统指令的 32 位无符号整数值由可读命令字符串按网络字节序（大端）转换得到（见 `110-design-type-cmd.md` 命令定义）。工厂方法统一通过下列枚举引用命令；`DATA` 可由空 command（C=0）打包，无需枚举值。
+
+| 枚举符号           | 线上命令字符串 | 32 位值（大端） | 标志位               | 说明                 |
+|-------------------|----------|--------------|-------------------------|----------------------|
+| `Command.SYN`     | `"SYN?"` | `0x53594E3F` | A=0,      C=1, D=0, E=0 | 第 1 次握手（请求连接） |
+| `Command.SYN_ACK` | `"SYN!"` | `0x53594E21` | A=1,      C=1, D=0, E=0 | 第 2 次握手（收到请求） |
+| `Command.ACK`     | `"ACK!"` | `0x41434B21` | A=1,      C=1, D=0, E=0 | 第 3 次握手（确认连接） |
+| `Command.FAIL`    | `"FAIL"` | `0x4641494C` | A=1,      C=1           | 失败应答              |
+| `Command.DONE`    | `"DONE"` | `0x444F4E45` | A=1,      C=1           | 成功应答              |
+| `Command.ACPT`    | `"ACPT"` | `0x41435054` | A=0, B=1, C=1, D=0, E=0 | 接受（添加通行证）      |
+| `Command.DENY`    | `"DENY"` | `0x44454E59` | A=0, B=1, C=1, D=0, E=0 | 拒绝（删除通行证）      |
+| `Command.PING`    | `"PING"` | `0x50494E47` | A=0,      C=1, D=0, E=0 | 发起心跳              |
+| `Command.PONG`    | `"PONG"` | `0x504F4E47` | A=1,      C=1, D=0, E=0 | 心跳应答              |
+| `Command.FIN`     | `"FIN?"` | `0x46494E3F` | A=0,      C=1, D=0, E=0 | 第 1 次挥手（请求关闭） |
+| `Command.FIN_ACK` | `"FIN!"` | `0x46494E21` | A=1,      C=1, D=0, E=0 | 第 2 次挥手（确认关闭）；枚举名 `FIN_ACK` 对应线上字符串 `"FIN!"` |
+| `Command.NOOP`    | `"NOOP"` | `0x4E4F4F50` | A=0,      C=1, D=0, E=0 | 无操作                |
+| `Command.COPY`    | `"COPY"` | `0x434F5059` | A=1,      C=1, D=1      | 确认收到（数据应答包）   |
+| `Command.EMPTY`   | `""` ≡ `"DATA"` | `0`   | A=0,      C=0, D=1      | 普通数据包；`"DATA"` 显式值为 `0x44415441`（A=0, C=1, D=1） |
+
+```dart
+/// System command identifiers; [value] is the big-endian 32-bit integer
+/// packed into the 4-byte command field (C=1). Empty command (C=0) is
+/// represented by value 0 and means "DATA".
+class Command {
+  Command._();
+
+  /// Handshake
+  static const SYN     = 0x53594E3F; // "SYN?"
+  static const SYN_ACK = 0x53594E21; // "SYN!"
+  static const ACK     = 0x41434B21; // "ACK!"
+
+  /// Result
+  static const FAIL    = 0x4641494C; // "FAIL"
+  static const DONE    = 0x444F4E45; // "DONE"
+
+  /// Permit
+  static const ACPT    = 0x41435054; // "ACPT"
+  static const DENY    = 0x44454E59; // "DENY"
+
+  /// Heartbeat
+  static const PING    = 0x50494E47; // "PING"
+  static const PONG    = 0x504F4E47; // "PONG"
+
+  /// Shutdown
+  static const FIN     = 0x46494E3F; // "FIN?"
+  static const FIN_ACK = 0x46494E21; // "FIN!"
+
+  static const NOOP    = 0x4E4F4F50; // "NOOP"
+
+  /// Data
+  static const DATA    = 0x44415441; // "DATA"
+  static const COPY    = 0x434F5059; // "COPY"
+
+  static const EMPTY   = 0x00000000; // empty command: C=0, same meaning as "DATA"
+}
+```
+
 ## 消息包
 
 消息包分两大类： BridgePacket（桥接包）和 DirectPacket（直连包）。
 
-### 消息包基类 MessagePacket
+### 内部实现类 MessagePacket
 
 实现一切消息包的基础属性与方法。
 
 ```dart
-class MessagePacket implements Magpie {
+class MessagePacket implements Magpie, Packet {
     MessagePacket(this._buffer, {
         
         required this.ack,
@@ -39,30 +98,30 @@ class MessagePacket implements Magpie {
     Uint8List? _buffer;
     
     /// flags
-    final int ack;
-    final int bid;
-    final int cmd;
-    final int dsn;
-    final int ext;
+    @override final int ack;
+    @override final int bid;
+    @override final int cmd;
+    @override final int dsn;
+    @override final int ext;
     
     /// length
-    final int headerLength;
-    final int payloadLength;
+    @override final int headerLength;
+    @override final int payloadLength;
     
     /// bid
-    final int target;
-    final int source;
+    @override final int target;
+    @override final int source;
     
     /// mid
-    final int sn;
-    final int index;
-    final int count;
+    @override final int sn;
+    @override final int index;
+    @override final int count;
     
     /// command
-    final int command;
+    @override final int command;
     
     /// payload
-    final Uint8List? payload;
+    @override final Uint8List? payload;
     
     // ...
     
@@ -75,14 +134,71 @@ class MessagePacket implements Magpie {
         }
         return data;
     }
+}
+```
 
-    /// Clone this packet WITHOUT its attachment (附加校验码).
-    /// Used by sign()/verify() so the HMAC is computed over the bare
-    /// header + payload only. This is a packet-instance clone helper;
-    /// it is distinct from the factory `copy(packet, [response])` that
-    /// builds the "COPY" data-acknowledgment packet.
-    MessagePacket copy();
+### 消息包基类 BasePacket
 
+内部实现的代理。
+
+```dart
+class BasePacket implements Magpie, Packet {
+    BasePacket(this._packet);
+    
+    /// the inner packet
+    final Packet _packet;
+    
+    // ...
+    
+    @override
+    Uint8List pack() => _packet.pack();
+    
+    /// Compute HMAC-SHA256 over (header + payload) and return a signed packet.
+    /// Note: DirectPacket inherits this as well; signing a direct packet is a
+    /// reserved capability (the app decides whether it needs one).
+    ReliablePacket sign(Uint8List secret) {
+        // pack() yields header + payload only; the attachment stays separate.
+        final base = _packet.pack();
+        final digest = hmacSha256(secret: secret, message: base);
+        return ReliablePacket(_packet, digest);
+    }
+}
+```
+
+### 签名消息包 ReliablePacket
+
+在内部实现基础上增加一个额外校验码信息。
+
+```dart
+class ReliablePacket extends BasePacket {
+    ReliablePacket(super._packet, this.attachment);
+    
+    /// The 32-byte HMAC-SHA256 digest.
+    final Uint8List attachment;
+    
+    @override
+    Uint8List pack() {
+        final base = _packet.pack();
+        final digest = attachment;
+        final merged = Uint8List(base.length + digest.length);
+        merged.setRange(0, base.length, base);
+        merged.setRange(base.length, merged.length, digest);
+        return merged;
+    }
+    
+    /// Verify the attachment with [secret]. Constant-time comparison.
+    bool verify(Uint8List secret) {
+        final digest = attachment;
+        if (digest.length != ATTACHMENT_LENGTH) {
+            return false;
+        } else if (secret.isEmpty) {
+            return false;
+        }
+        // Re-pack header+payload (without attachment) the same way sign() did.
+        final base = _packet.pack();
+        final computed = hmacSha256(secret: secret, message: base);
+        return constantTimeByteEq(digest, computed);
+    }
 }
 ```
 
@@ -91,173 +207,41 @@ class MessagePacket implements Magpie {
 客户端与服务器通信的消息包，包括委托服务器中转的消息包。
 
 ```dart
-class BridgePacket extends MessagePacket {
-    BridgePacket._(Uint8List? buffer, {
-        
-        required super.ack,
-        // required super.bid,
-        required super.cmd,
-        required super.dsn,
-        required super.ext,
-        
-        // required super.headerLength,
-        // required super.payloadLength,
-        
-        required super.target,
-        required super.source,
-        
-        required super.sn,
-        required super.index,
-        required super.count,
-        
-        required super.command,
-        
-        required super.payload,
-    }) : super(buffer,
-        
-        /// 桥接包 B=1
-        bid: 1,
-            
-        /// 计算 headerLength 和 payloadLength
-        headerLength: calcHeaderLength(bid: 1, cmd: cmd, dsn: dsn, ext: ext),
-        payloadLength: payload.length,
-    );
+class BridgePacket extends BasePacket {
+    BridgePacket(super._packet);
     
-    factory BridgePacket(Uint8List? buffer, {
-        
-        required int ack,
-        // required int bid,
-        // required int cmd,
-        // required int dsn,
-        // required int ext,
-         
-        // required int headerLength,
-        // required int payloadLength,
-         
-        required int target,
-        required int source,
-         
-        required int sn,
-        required int index,
-        required int count,
-         
-        required int command,
-        
-        required Uint8List? payload,
-    }) => BridgePacket._(buffer,
-        
-        ack: ack,
-        // bid: 1,
-        cmd: calcCmd(command),
-        dsn: calcDsn(sn),
-        ext: calcExt(count),
-        
-        // headerLength: ...,
-        // payloadLength: ...,
-        
-        target: target,
-        source: source,
-        
-        sn:    sn,
-        index: index,
-        count: count,
-        
-        command: command,
-        
-        payload: payload,
-    );
-    
-    //
-    //  Factory methods
-    //
-    
+    /// Build a fresh BridgePacket from scratch (wire bytes not yet packed).
     factory BridgePacket.create({
-        
         required int ack,
-        // required int bid,
-        // required int cmd,
-        // required int dsn,
-        // required int ext,
-         
-        // required int headerLength,
-        // required int payloadLength,
-         
         required int target,
         required int source,
-         
         required int sn,
         required int index,
         required int count,
-         
         required int command,
-        
         required Uint8List? payload,
-    }) => BridgePacket._(null,
-        
-        ack: ack,
-        // bid: 1,
-        cmd: calcCmd(command),
-        dsn: calcDsn(sn),
-        ext: calcExt(count),
-        
-        // headerLength: ...,
-        // payloadLength: ...,
-        
-        target: target,
-        source: source,
-        
-        sn:    sn,
-        index: index,
-        count: count,
-        
-        command: command,
-        
-        payload: payload,
-    );
-```
-
-### 命令枚举 Command
-
-系统指令的 32 位无符号整数值由可读命令字符串按网络字节序（大端）转换得到（见 `110-design-type-cmd.md` 命令定义）。工厂方法统一通过下列枚举引用命令；`DATA` 可由空 command（C=0）打包，无需枚举值。
-
-| 枚举符号 | 线上命令字符串 | 32 位值（大端） | 标志位 | 说明 |
-|---|---|---|---|---|
-| `Command.SYN` | `"SYN?"` | `0x53594E3F` | A=0, C=1, D=0, E=0 | 第 1 次握手（请求连接） |
-| `Command.SYN_ACK` | `"SYN!"` | `0x53594E21` | A=1, C=1, D=0, E=0 | 第 2 次握手（收到请求） |
-| `Command.ACK` | `"ACK!"` | `0x41434B21` | A=1, C=1, D=0, E=0 | 第 3 次握手（确认连接） |
-| `Command.FAIL` | `"FAIL"` | `0x4641494C` | A=1, C=1 | 失败应答 |
-| `Command.DONE` | `"DONE"` | `0x444F4E45` | A=1, C=1 | 成功应答 |
-| `Command.ACPT` | `"ACPT"` | `0x41435054` | A=0, B=1, C=1, D=0, E=0 | 接受（添加通行证） |
-| `Command.DENY` | `"DENY"` | `0x44454E59` | A=0, B=1, C=1, D=0, E=0 | 拒绝（删除通行证） |
-| `Command.PING` | `"PING"` | `0x50494E47` | A=0, C=1, D=0, E=0 | 发起心跳 |
-| `Command.PONG` | `"PONG"` | `0x504F4E47` | A=1, C=1, D=0, E=0 | 心跳应答 |
-| `Command.FIN` | `"FIN?"` | `0x46494E3F` | A=0, C=1, D=0, E=0 | 第 1 次挥手（请求关闭） |
-| `Command.FIN_ACK` | `"FIN!"` | `0x46494E21` | A=1, C=1, D=0, E=0 | 第 2 次挥手（确认关闭）；枚举名 `FIN_ACK` 对应线上字符串 `"FIN!"` |
-| `Command.NOOP` | `"NOOP"` | `0x4E4F4F50` | A=0, C=1, D=0, E=0 | 无操作 |
-| `Command.COPY` | `"COPY"` | `0x434F5059` | A=1, C=1, D=1 | 确认收到（数据应答包） |
-| —（空 command，C=0） | `""` ≡ `"DATA"` | `0`（字段不存在） | A=0, C=0, D=1 | 普通数据包；`"DATA"` 显式值为 `0x44415441`（A=0, C=1, D=1） |
-
-```dart
-/// System command identifiers; [value] is the big-endian 32-bit integer
-/// packed into the 4-byte command field (C=1). Empty command (C=0) is
-/// represented by value 0 and means "DATA".
-enum Command {
-    SYN(0x53594E3F),
-    SYN_ACK(0x53594E21),
-    ACK(0x41434B21),
-    FAIL(0x4641494C),
-    DONE(0x444F4E45),
-    ACPT(0x41435054),
-    DENY(0x44454E59),
-    PING(0x50494E47),
-    PONG(0x504F4E47),
-    FIN(0x46494E3F),
-    FIN_ACK(0x46494E21),  // wire string "FIN!"
-    NOOP(0x4E4F4F50),
-    COPY(0x434F5059);
-
-    final int value;
-    const Command(this.value);
+    }) {
+        final cmd = calcCmd(command);
+        final dsn = calcDsn(sn);
+        final ext = calcExt(count);
+        payload ??= Uint8List(0);
+        return BridgePacket(MessagePacket(null,
+            ack: ack,
+            bid: 1,
+            cmd: cmd,
+            dsn: dsn,
+            ext: ext,
+            headerLength: calcHeaderLength(bid: 1, cmd: cmd, dsn: dsn, ext: ext),
+            payloadLength: payload.length,
+            target: target,
+            source: source,
+            sn: sn,
+            index: index,
+            count: count,
+            command: command,
+            payload: payload,
+        ));
+    }
 }
 ```
 
@@ -522,7 +506,7 @@ class BridgePacketFactory {
         index: index,
         count: count,
         
-        command: 0,  // 为了尽可能控制数据包体积，这里使用空 command 打包
+        command: Command.EMPTY,  // 为了尽可能控制数据包体积，这里使用空 command 打包
         
         payload: data,
     );
@@ -557,12 +541,6 @@ class BridgePacketFactory {
 	    //    检查 Magic Code（buffer[0..3] == 'M','P',0,'\1'）；
 	    //    读出 type 标志字节（偏移 4；其后偏移 5 为 header_length，偏移 6..7 为 payload_length）
 	    //    并拆出本地标志位：
-	    int type = buffer[4];
-	    int ack = (type >> 7) & 0x01;
-	    int bid = (type >> 6) & 0x01;
-	    int cmd = (type >> 5) & 0x01;
-	    int dsn = (type >> 4) & 0x01;
-	    int ext = type & 0x07;
 	    //    检查 E 合法性：E = type & 0x07（低 3 位，bit 3 不检查）；
 	    //    E 只允许 0~4，取值 5/6/7 判定为错误包；
 	    //    检查约束：E>0 时 D 必须为 1（D=0 且 E>0 判定为错误包）；
@@ -572,25 +550,27 @@ class BridgePacketFactory {
 	    //    根据 flags 指示依次读出 target, source, sn, index, count, command 等参数（本地变量）；
 	    //    检查各项参数是否越界：若 D=1，则 sn 必须非 0（全 0 判定为错误包）；E>0 时 count 必须 > 1，且 0 <= index < count，否则为错误包；
 	    //    若 C=1，则 command 必须非 0（全 0 判定为错误包）；不校验 command 的具体取值（是否系统指令由上层判断）；
-	    if (bid != 1) {
-	        assert(false, 'not a bridge packet: ${buffer.length}');
-	        return null;
-	    }
 
 	    // 3. 读取 payload，然后创建消息包对象
 	    // TODO: 步骤 1/2 中已拆出的 ack/target/source/sn/index/count/command/payload
 	    //       按下面的构造签名传入；buffer 为校验通过后的完整报文（含/不含 attachment
 	    //       的差值判定见 docs/sdk.md 6.2）。
-	    return BridgePacket(buffer,
+	    return BridgePacket(MessagePacket(buffer,
 	        ack: ack,
+            bid: 1,
+            cmd: cmd,
+            dsn: dsn,
+            ext: ext,
+            headerLength: headerLength,
+            payloadLength: payloadLength,
 	        target: target,
 	        source: source,
-	        sn: sn,
+            sn: sn,
 	        index: index,
 	        count: count,
-	        command: command,
+            command: command,
 	        payload: payload,
-	    );
+	    ));
 	}
 }
 ```
@@ -600,132 +580,40 @@ class BridgePacketFactory {
 客户端与客户端直接通信的消息包。
 
 ```dart
-class DirectPacket extends MessagePacket {
-    DirectPacket._(Uint8List? buffer, {
-        
-        required super.ack,
-        // required super.bid,
-        required super.cmd,
-        required super.dsn,
-        required super.ext,
-        
-        // required super.headerLength,
-        // required super.payloadLength,
-        
-        // required super.target,
-        // required super.source,
-        
-        required super.sn,
-        required super.index,
-        required super.count,
-        
-        required super.command,
-        
-        required super.payload
-    }) : super(buffer,
-        
-        /// 直连包 B=0, 无 bid
-        bid: 0,
-            
-        /// 计算 headerLength 和 payloadLength
-        headerLength: calcHeaderLength(bid: 0, cmd: cmd, dsn: dsn, ext: ext),
-        payloadLength: payload.length,
-        
-        target: 0,
-        source: 0,
-    );
+class DirectPacket extends BasePacket {
+    DirectPacket(super._packet);
     
-    factory DirectPacket(Uint8List? buffer, {
-        
-        required int ack,
-        // required int bid,
-        // required int cmd,
-        // required int dsn,
-        // required int ext,
-         
-        // required int headerLength,
-        // required int payloadLength,
-         
-        // required int target,
-        // required int source,
-         
-        required int sn,
-        required int index,
-        required int count,
-         
-        required int command,
-        
-        required Uint8List? payload,
-    }) => DirectPacket._(buffer,
-        
-        ack: ack,
-        // bid: 0,
-        cmd: calcCmd(command),
-        dsn: calcDsn(sn),
-        ext: calcExt(count),
-        
-        // headerLength: ...,
-        // payloadLength: ...,
-        
-        // target: 0,
-        // source: 0,
-        
-        sn:    sn,
-        index: index,
-        count: count,
-        
-        command: command,
-        
-        payload: payload,
-    );
-    
-    //
-    //  Factory methods
-    //
-    
+    /// Build a fresh DirectPacket from scratch (wire bytes not yet packed).
     factory DirectPacket.create({
-        
         required int ack,
-        // required int bid,
-        // required int cmd,
-        // required int dsn,
-        // required int ext,
-         
-        // required int headerLength,
-        // required int payloadLength,
-         
-        // required int target,
-        // required int source,
-         
         required int sn,
         required int index,
         required int count,
-         
         required int command,
-        
         required Uint8List? payload,
-    }) => DirectPacket._(null,
-        
-        ack: ack,
-        // bid: 0,
-        cmd: calcCmd(command),
-        dsn: calcDsn(sn),
-        ext: calcExt(count),
-        
-        // headerLength: ...,
-        // payloadLength: ...,
-        
-        // target: 0,
-        // source: 0,
-        
-        sn:    sn,
-        index: index,
-        count: count,
-        
-        command: command,
-        
-        payload: payload,
-    );
+    }) {
+        final cmd = calcCmd(command);
+        final dsn = calcDsn(sn);
+        final ext = calcExt(count);
+        payload ??= Uint8List(0);
+        return DirectPacket(MessagePacket(null,
+            ack: ack,
+            bid: 0,
+            cmd: cmd,
+            dsn: dsn,
+            ext: ext,
+            headerLength: calcHeaderLength(bid: 0, cmd: cmd, dsn: dsn, ext: ext),
+            payloadLength: payload.length,
+            target: 0,
+            source: 0,
+            sn: sn,
+            index: index,
+            count: count,
+            command: command,
+            payload: payload,
+        ));
+    }
+}
 ```
 
 ### 直连包工厂 DirectPacketFactory
@@ -745,12 +633,6 @@ class DirectPacketFactory {
 	    // 1. 前 8 个字节的有效性检查
 	    //    检查 Magic Code（buffer[0..3] == 'M','P',0,'\1'）；
 	    //    读出 type 标志字节（偏移 4）并拆出本地标志位：
-	    int type = buffer[4];
-	    int ack = (type >> 7) & 0x01;
-	    int bid = (type >> 6) & 0x01;
-	    int cmd = (type >> 5) & 0x01;
-	    int dsn = (type >> 4) & 0x01;
-	    int ext = type & 0x07;
 	    //    检查 E 合法性：E = type & 0x07（低 3 位，bit 3 不检查）；
 	    //    E 只允许 0~4，取值 5/6/7 判定为错误包；
 	    //    检查约束：E>0 时 D 必须为 1（D=0 且 E>0 判定为错误包）；
@@ -760,22 +642,26 @@ class DirectPacketFactory {
 	    //    根据 flags 指示依次读出 sn, index, count, command 等参数（本地变量；直连包无 target/source）；
 	    //    检查各项参数是否越界：若 D=1，则 sn 必须非 0（全 0 判定为错误包）；E>0 时 count 必须 > 1，且 0 <= index < count，否则为错误包；
 	    //    若 C=1，则 command 必须非 0（全 0 判定为错误包）；不校验 command 的具体取值（是否系统指令由上层判断）；
-	    if (bid != 0) {
-	        assert(false, 'not a direct packet: ${buffer.length}');
-	        return null;
-	    }
 
 	    // 3. 读取 payload，然后创建消息包对象
 	    // TODO: 步骤 1/2 中已拆出的 ack/sn/index/count/command/payload 按下面的构造签名传入；
 	    //       直连包 target/source 恒为 0（B=0，无 bid 字段）。
-	    return DirectPacket(buffer,
+	    return DirectPacket(MessagePacket(buffer,
 	        ack: ack,
-	        sn: sn,
+            bid: 0,
+            cmd: cmd,
+            dsn: dsn,
+            ext: ext,
+            headerLength: headerLength,
+            payloadLength: payloadLength,
+	        target: 0,
+	        source: 0,
+            sn: sn,
 	        index: index,
 	        count: count,
-	        command: command,
+            command: command,
 	        payload: payload,
-	    );
+	    ));
 	}
     
     //

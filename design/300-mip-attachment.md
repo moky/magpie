@@ -33,42 +33,7 @@ Magpie Protocol 核心协议层只定义了基础消息包格式，不包括整�
 由于直连包不需要 verify（其数据合法性由客户端应用负责），
 所以对于升级后的协议，只需要升级 BridgePacket 相关部分的代码即可。
 
-### 1. 升级 MessagePacket 类
-
-增加 copy() 功能。
-
-```dart
-class MessagePacket implements Magpie {
-    // ...
-    
-    // protected
-    MessagePacket copy() => MessagePacket(_buffer,
-        
-        ack: ack,
-        bid: bid,
-        cmd: cmd,
-        dsn: dsn,
-        ext: ext,
-        
-        headerLength:  headerLength,
-        payloadLength: payloadLength,
-        
-        target: target,
-        source: source,
-        
-        sn:    sn,
-        index: index,
-        count: count,
-        
-        command: command,
-        
-        payload: payload,
-    );
-    
-}
-```
-
-### 2. 升级 BridgePacket 类
+### 1. 升级 BridgePacket 类
 
 增加 sign(secret) 功能。
 
@@ -87,79 +52,45 @@ Uint8List hmacSha256({required Uint8List secret, required Uint8List message}) {
 }
 
 
-class BridgePacket extends MessagePacket {
+class BridgePacket extends BasePacket {
+    BridgePacket(super._packet);
+
     // ...
     
     ReliablePacket sign(Uint8List secret) {
-        // 1. 先剔除原 attachment 字段（如果有），
-        //    再打包为二进制（如果 buffer 不为空则直接复用）
-        final data = copy().pack();
-        
+        // 1. 打包为二进制（header + payload；有缓存直接复用）
+        final base = _packet.pack();
         // 2. HMAC-SHA256
-        final verify = hmacSha256(secret: secret, message: data);
-        
+        final verify = hmacSha256(secret: secret, message: base);
         // 3. 返回带签名的包
-        return ReliablePacket(data,
-            
-            ack: ack,
-            ...
-            payload: payload,
-            
-            attachment: verify,
-        );
+        return ReliablePacket(_packet, verify);
     }
 }
 ```
 
-### 3. 扩展 BridgePacket，增加带校验码的子类 ReliablePacket
+### 2. 扩展 BridgePacket，增加带校验码的子类 ReliablePacket
 
 （直连包不需要 verify）
 
 ```dart
-class ReliablePacket extends BridgePacket {
-    ReliablePacket(Uint8List? buffer, {
-        
-        required super.ack,
-        // required super.bid,
-        required super.cmd,
-        required super.dsn,
-        required super.ext,
-        
-        // required super.headerLength,
-        // required super.payloadLength,
-        
-        required super.target,
-        required super.source,
-        
-        required super.sn,
-        required super.index,
-        required super.count,
-        
-        required super.command,
-        
-        required super.payload,
-        
-        required this.attachment,
-    }) : super(buffer);
+class ReliablePacket extends BasePacket {
+    ReliablePacket(super._packet, this.attachment);
     
-    /// verify
-    final Uint8List? attachment;
+    /// The 32-byte HMAC-SHA256 digest.
+    final Uint8List attachment;
     
+    /// Verify the attachment with [secret]. Constant-time comparison.
     bool verify(Uint8List secret) {
         final digest = attachment;
-        if (digest == null || digest.length != 32) {
-            assert(false, 'verify error: ${digest?.length}');
+        if (digest.length != 32) {
             return false;
         } else if (secret.isEmpty) {
-            assert(false, 'verify error: secret is empty');
             return false;
         }
-        // 1. 打包原始报文（已剔除 attachment，和 sign 时的 data 保持一致）
-        final data = copy().pack();
-        
+        // 1. 打包原始报文（header + payload，与 sign 时的 data 一致）
+        final base = _packet.pack();
         // 2. HMAC-SHA256
-        final computed = hmacSha256(secret: secret, message: data);
-        
+        final computed = hmacSha256(secret: secret, message: base);
         // 3. 常量时间对比，防计时攻击，禁止直接使用 digest == computed
         return _constantTimeByteEq(digest, computed);
     }
@@ -179,7 +110,7 @@ bool _constantTimeByteEq(Uint8List a, Uint8List b) {
 }
 ```
 
-### 4. 实现 BridgePacketFactory 的 parse() 接口
+### 3. 实现 BridgePacketFactory 的 parse() 接口
 
 服务器在**预处理线程**中调用解析接口，该线程不查询分配表、拿不到客户端密钥，因此解析层只做包级校验与类型判定，**不做**附加校验码验证（验证由管理线程/转发线程取得 `record.secret` 后调用 `ReliablePacket.verify()` 完成，见服务器设计）。
 
@@ -210,12 +141,12 @@ class BridgePacketFactory {
         // 3. 读取 payload，然后创建消息包对象
         
         if (tail == 0) {
-            return BridgePacket(buffer, ...);
+            return BridgePacket(MessagePacket(buffer, ...));
         }
         assert(tail == 32, 'data length error: ${buffer.length} != $headerLength + $payloadLength + 32');
         final attachment = buffer.sublist(size);
         buffer = buffer.sublist(0, size);
-        return ReliablePacket(buffer, ..., attachment: attachment);
+        return ReliablePacket(MessagePacket(buffer, ...), attachment);
     }
 
 }
