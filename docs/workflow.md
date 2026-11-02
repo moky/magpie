@@ -42,7 +42,7 @@ sequenceDiagram
 
 ### 2.2 加密握手（Enigma）
 
-服务器配置了应用密钥文件（`app_secret_file` 且 `secrets` 非空）时进入加密模式：secret 以 AES-256-GCM 加密下发，链路嗅探者无法获取明文。
+服务器配置了应用密钥文件（`app_secret_file` 且 `enigma.secrets` 非空）时进入加密模式：secret 以 AES-256-GCM 加密下发，链路嗅探者无法获取明文。
 
 ```mermaid
 sequenceDiagram
@@ -60,7 +60,7 @@ sequenceDiagram
 ```
 
 - 基础模式 "ACK!" 不带校验码；加密模式 "ACK!" **必须带**（证明持有 secret，防僵尸注册）；
-- 非加密/加密切换由 `app_secret_file` 状态自动决定（未配置/文件缺失/secrets 为空 → 非加密）；
+- 非加密/加密切换由 `app_secret_file` 状态自动决定（未配置/文件缺失/enigma.secrets 为空 → 非加密）；
 - 密钥重载：管理线程每 `app_secret_reload_interval`（600s）重读文件，失败保留旧表。
 
 ### 2.3 直连握手（B=0）

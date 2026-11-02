@@ -111,7 +111,7 @@ class MessagePacket implements Magpie, Packet {
 说明：
 
 1. 第一次握手时可填 source 作为预订 bid（可选）；预订失败（被占用/非法/服务器已满）时服务器回复 "FAIL"，由客户端决定重新申请或放弃；
-2. 除 "DATA" 外（payload 需承载文件数据），其余指令包均可携带可选参数 request/response 作为载荷附加信息；
+2. 除 "DATA" 外（payload 需承载文件数据），其余指令包的工厂方法均以 request/response 载荷参数承载附加信息（参数必传，载荷遵循载荷文档格式）；
 3. 系统指令载荷为 JSON 字符串（须含发送方时间戳 "time"），所有指令（含应答）均须携带发送方当前时间戳（秒），不允许为空；
 4. 通配授权（"ACPT *"）与清空通行证（"DENY *"）通过 acpt/deny 的 request 载荷传入通配标记 [1, 2, 3]（严格按序）实现，工厂方法本身不变（见协议文档 6.2）；
 5. DirectPacketFactory 无 acpt/deny/fail/done 工厂方法（这些指令只与服务器通信）。
@@ -180,23 +180,23 @@ class Command {
 ```dart
 class BridgePacketFactory {
     /// 第一次握手：source 为预订 bid（可选，0 = 由服务器分配）
-    BridgePacket syn(Uint8List? request, {int source = 0}) => BridgePacket.create(
+    BridgePacket syn(Uint8List request, {int source = 0}) => BridgePacket.create(
         ack: 0, target: 0, source: source, sn: 0, index: 0, count: 1,
         command: Command.SYN, payload: request);
 
     /// 第二次握手：target 为服务器分配的 bid
-    BridgePacket synAck(Uint8List? response, {required int target}) => ...;
+    BridgePacket synAck(Uint8List response, {required int target}) => ...;
 
     /// 第三次握手：原样回传第二次握手包中的 secret/token/token_time
-    BridgePacket ack(Uint8List? response, {required int source}) => ...;
+    BridgePacket ack(Uint8List response, {required int source}) => ...;
 
-    BridgePacket fail(Uint8List? response, {required int target}) => ...;
-    BridgePacket done(Uint8List? response, {required int target}) => ...;
-    BridgePacket acpt(Uint8List? request, {required int source}) => ...;
-    BridgePacket deny(Uint8List? request, {required int source}) => ...;
-    BridgePacket ping(Uint8List? request, {required int source}) => ...;
-    BridgePacket fin(Uint8List? request, {required int source}) => ...;
-    BridgePacket noop(Uint8List? request, {required int source}) => ...;
+    BridgePacket fail(Uint8List response, {required int target, int sn = 0, int index = 0, int count = 1}) => ...;
+    BridgePacket done(Uint8List response, {required int target, int sn = 0, int index = 0, int count = 1}) => ...;
+    BridgePacket acpt(Uint8List request, {required int source}) => ...;
+    BridgePacket deny(Uint8List request, {required int source}) => ...;
+    BridgePacket ping(Uint8List request, {required int source}) => ...;
+    BridgePacket fin(Uint8List request, {required int source}) => ...;
+    BridgePacket noop(Uint8List request, {required int source}) => ...;
 
     /// 应答类工厂：bid 对调、原路返回，其余字段从原包复制
     BridgePacket pong(Magpie packet, [Uint8List? response]) => ...;
@@ -204,7 +204,7 @@ class BridgePacketFactory {
     BridgePacket copy(Magpie packet, [Uint8List? response]) => ...;
 
     /// 普通数据包：command = Command.EMPTY（空 command 打包，控制体积）
-    BridgePacket data(Uint8List data, {
+    BridgePacket data(Uint8List payload, {
         required int target, required int source,
         required int sn, required int index, required int count,
     }) => ...;

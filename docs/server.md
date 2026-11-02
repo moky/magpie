@@ -68,7 +68,7 @@
 1. **回收检查**：距上次调用超过 `record_recycle_interval`（600s）则调用 `purge(now)` 回收超时记录及关联的通行证条目；
 2. 从管理请求队列取下一个任务（空则阻塞等待）；
 3. 按 command 走子流程：
-   - "SYN?"：唯一允许 source bid = 0 的场景（分配/预订/内定，见 5 节）；
+   - "SYN?"：唯一允许 source bid = 0 的场景（分配/预订/内定，见 5 节）；加密模式须先校验上报 enigmas 与本地映射表交集（缺失/交集为空则静默丢弃、不进入分配），通过后分配/复用 bid 并从交集选密钥加密 secret（见安全文档 4.2、协议文档 7.3）；
    - "ACK!"：无状态 token 校验（`token_time` 须在 `handshake_token_timeout` 窗口内，超时静默丢弃、不创建记录）；基础模式无校验码，加密模式须带 HMAC 校验码（验证链见安全文档 4.2、协议文档 7.3）；通过后创建记录；
    - 其余系统指令：先来源检查（socket 查表 → 无记录按连接未确认；不匹配按伪造丢弃）；再附加校验（HMAC，失败即丢弃）；再**离线分流**（记录 offline == true 且 command 不属于 "FIN?"/"NOOP" → 静默丢弃、不更新 last_time）；再更新 last_time，再指令集过滤（未知指令丢弃），最后按 command 执行；
 4. 周期任务：应用密钥重载（见 6.4）。
@@ -399,26 +399,27 @@ forward_limit_per_window = 4096
 # forwarder rate limit window (seconds, default: 0.1)
 forward_window = 0.1
 
-# record lifecycle
+# bid record
+record_active_timeout = 60.0
 record_expires = 86400.0
 record_recycle_interval = 600.0
-record_active_timeout = 60.0
 max_records = 65536
+allowlist_max_entries = 256
+bid_allocation_retries = 16
 
 # security
+handshake_token_timeout = 60.0
 handshake_min_payload = 512
 unconfirmed_reply_buckets = 1024
 reply_rate_limit = 10
-allowlist_max_entries = 256
 noop_immunity_window = 2.0
-server_secret_rotate_interval = 600.0
-handshake_token_timeout = 60.0
-bid_allocation_retries = 16
 
 # app secret (enigma); unset/empty/missing/unparsable/empty secrets -> non-encrypted mode
 # app_secret_file = /etc/magpie/private/enigma.json
 app_secret_file =
 app_secret_reload_interval = 600.0
+
+server_secret_rotate_interval = 600.0
 
 # queues (tasks)
 waiting_queue_size = 4096

@@ -31,11 +31,12 @@ Magpie Protocol 核心协议层只定义了基础消息包格式，不包括整�
 ## SDK 升级
 
 由于直连包不需要 verify（其数据合法性由客户端应用负责），
-所以对于升级后的协议，只需要升级 BridgePacket 相关部分的代码即可。
+所以对于升级后的协议，附加校验统一落在代理基类 BasePacket 上：sign() 定义于 BasePacket，
+BridgePacket 与 DirectPacket 均继承（直连包签名为保留能力，由应用层决定是否需要）。
 
-### 1. 升级 BridgePacket 类
+### 1. 代理基类 BasePacket 增加签名能力
 
-增加 sign(secret) 功能。
+在 BasePacket 上定义 sign(secret)，BridgePacket 与 DirectPacket 均继承（直连包签名为保留能力，由应用层决定是否需要）。
 
 ```dart
 import 'package:crypto/crypto.dart';
@@ -52,8 +53,11 @@ Uint8List hmacSha256({required Uint8List secret, required Uint8List message}) {
 }
 
 
-class BridgePacket extends BasePacket {
-    BridgePacket(super._packet);
+class BasePacket implements Magpie, Packet {
+    BasePacket(this._packet);
+
+    /// the inner packet
+    final Packet _packet;
 
     // ...
     
@@ -68,7 +72,7 @@ class BridgePacket extends BasePacket {
 }
 ```
 
-### 2. 扩展 BridgePacket，增加带校验码的子类 ReliablePacket
+### 2. 在 BasePacket 之上扩展带校验码的子类 ReliablePacket
 
 （直连包不需要 verify）
 

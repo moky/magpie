@@ -91,14 +91,14 @@ token = HMAC-SHA256(server_secret, "bid={bid}&secret={secret}&socket={socket}&ti
 
 ### 4.2 加密握手（Enigma）
 
-应用密钥用于**在握手阶段加密 secret**，使链路嗅探者无法获得明文。服务器通过配置 `app_secret_file`（默认空）指向密钥文件；**未配置/文件不存在/`secrets` 为空等均切换为非加密模式**，密钥文件非空才强制加密模式。
+应用密钥用于**在握手阶段加密 secret**，使链路嗅探者无法获得明文。服务器通过配置 `app_secret_file`（默认空）指向密钥文件；**未配置/文件不存在/`enigma.secrets` 为空等均切换为非加密模式**，密钥文件非空才强制加密模式。
 
 ```mermaid
 sequenceDiagram
     participant C as 客户端
     participant M as 服务器（管理线程）
 
-    Note over C,M: 加密模式（app_secret_file 已配置且 secrets 非空）
+    Note over C,M: 加密模式（app_secret_file 已配置且 enigma.secrets 非空）
     C->>M: "SYN?"（enigmas: [键列表]，载荷≥512B，无校验码）
     M->>M: 取键交集任选 enigma → HKDF-SHA256 派生 AES-256 密钥
     M->>M: AES-GCM 加密 secret → (ciphertext, tag)

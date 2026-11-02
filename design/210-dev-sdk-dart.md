@@ -257,7 +257,7 @@ class BridgePacketFactory {
     /// 非 0 表示客户端希望预订该 bid（新建预订须 > 65535；
     /// 若是 loopback 重握手复用之前的内定 bid，且该 socket 记录尚未被回收，可传 = port ≤ 65535 的原值；
     /// 记录已回收时该 bid 不再可用，应传 0 重新申请）。
-    BridgePacket syn(Uint8List? request, {
+    BridgePacket syn(Uint8List request, {
         int source = 0
     }) => BridgePacket.create(
         ack: 0,
@@ -277,7 +277,7 @@ class BridgePacketFactory {
     /// 第二次握手
     /// response 为载荷数据区（含 secret/token/token_time/UDP/time，
     /// 由服务器逻辑构造，纯 JSON 格式）
-    BridgePacket synAck(Uint8List? response, {
+    BridgePacket synAck(Uint8List response, {
         required int target,  // 服务器为该客户端分配的 bid
     }) => BridgePacket.create(
         ack: 1,
@@ -297,7 +297,7 @@ class BridgePacketFactory {
     /// 第三次握手
     /// response 原样回传第二次握手包中的 secret/token/token_time
     /// （数据区 time 取客户端当前时间），纯 JSON 格式
-    BridgePacket ack(Uint8List? response, {
+    BridgePacket ack(Uint8List response, {
         required int source,  // 从第二次握手包中得到的 target
     }) => BridgePacket.create(
         ack: 1,
@@ -316,7 +316,7 @@ class BridgePacketFactory {
     
     /// 失败应答
     /// 服务器向客户端返回失败：target = 已分配的 bid；response 载荷按场景区分（bid 分配失败、对端离线、通行证修改失败等，具体格式见载荷文档）。
-    BridgePacket fail(Uint8List? response, {
+    BridgePacket fail(Uint8List response, {
         required int target,  // 客户端 bid（期望或已分配）
         int sn = 0,
         int index = 0,
@@ -338,7 +338,7 @@ class BridgePacketFactory {
     
     /// 成功应答
     /// 服务器向客户端返回成功：target = 已分配的 bid；response 载荷按场景区分（如通行证修改成功回显实际写入的 bid 列表，具体格式见载荷文档）。
-    BridgePacket done(Uint8List? response, {
+    BridgePacket done(Uint8List response, {
         required int target,
         int sn = 0,
         int index = 0,
@@ -360,7 +360,7 @@ class BridgePacketFactory {
     
     /// 添加通行证
     /// 允许通行的 source bid 列表放在 request（含 time）
-    BridgePacket acpt(Uint8List? request, {
+    BridgePacket acpt(Uint8List request, {
         required int source,
     }) => BridgePacket.create(
         ack: 0,
@@ -379,7 +379,7 @@ class BridgePacketFactory {
     
     /// 撤销通行证
     /// 禁止通行的 source bid 列表放在 request（含 time）
-    BridgePacket deny(Uint8List? request, {
+    BridgePacket deny(Uint8List request, {
         required int source,
     }) => BridgePacket.create(
         ack: 0,
@@ -397,7 +397,7 @@ class BridgePacketFactory {
     );
     
     /// 心跳
-    BridgePacket ping(Uint8List? request, {
+    BridgePacket ping(Uint8List request, {
         required int source,
     }) => BridgePacket.create(
         ack: 0,
@@ -416,7 +416,9 @@ class BridgePacketFactory {
     
     /// 心跳应答
     /// （packet 为收到的 ping 包；response 为应答信息，遵循载荷文档格式（含 time），由调用方构造）
-    BridgePacket pong(Magpie packet, [Uint8List? response]) => BridgePacket.create(
+    BridgePacket pong(Magpie packet, [
+        Uint8List? response
+    ]) => BridgePacket.create(
         ack: 1,
         
         /// bid 对调，原路返回
@@ -434,7 +436,7 @@ class BridgePacketFactory {
     );
     
     /// 第一次挥手
-    BridgePacket fin(Uint8List? request, {
+    BridgePacket fin(Uint8List request, {
         required int source,
     }) => BridgePacket.create(
         ack: 0,
@@ -453,7 +455,9 @@ class BridgePacketFactory {
     
     /// 第二次挥手
     /// （packet 为收到的 fin 包；response 为应答信息，遵循载荷文档格式（含 time），由调用方构造）
-    BridgePacket finAck(Magpie packet, [Uint8List? response]) => BridgePacket.create(
+    BridgePacket finAck(Magpie packet, [
+        Uint8List? response
+    ]) => BridgePacket.create(
         ack: 1,
         
         /// bid 对调，原路返回
@@ -472,7 +476,7 @@ class BridgePacketFactory {
     
     /// 无操作（保活/自愈）
     /// 用于意外收到 "FIN!" 时立即回复，以秒级恢复在线状态，无需应答（含 time）
-    BridgePacket noop(Uint8List? request, {
+    BridgePacket noop(Uint8List request, {
         required int source,
     }) => BridgePacket.create(
         ack: 0,
@@ -490,7 +494,7 @@ class BridgePacketFactory {
     );
     
     /// 普通数据包，通过服务器转发给接收方
-    BridgePacket data(Uint8List data, {
+    BridgePacket data(Uint8List payload, {
         required int target,
         required int source,
         required int sn,
@@ -508,12 +512,14 @@ class BridgePacketFactory {
         
         command: Command.EMPTY,  // 为了尽可能控制数据包体积，这里使用空 command 打包
         
-        payload: data,
+        payload: payload,
     );
     
     /// 数据应答包，通过服务器转发“确认收到”给原发送方
     /// （packet 为收到的数据包；response 为附加信息，默认为空）
-    BridgePacket copy(Magpie packet, [Uint8List? response]) => BridgePacket.create(
+    BridgePacket copy(Magpie packet, [
+        Uint8List? response
+    ]) => BridgePacket.create(
         ack: 1,
         
         // bid 对调，原路返回
