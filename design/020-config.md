@@ -176,8 +176,8 @@ max_records = 65536
 # the same 8-byte format, see the memory optimization section)
 allowlist_max_entries = 256
 
-# bid allocation retries: treat the server as full after M conflicts
-# (default: 16)
+# bid allocation retries: give up (reply FAIL) after M conflicts; note this does
+# not necessarily mean the server is full (default: 16)
 bid_allocation_retries = 16
 
 ################################################################

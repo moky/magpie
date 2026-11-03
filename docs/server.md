@@ -26,6 +26,7 @@
    - Magic Code 4 字节匹配；
    - 由 type 计算的协议头长度 N = 8 + 8B + 4D + 2E + 4C，须与 header_length 字段一致（E 取 5/6/7 即错误）；
    - `N + payload_length` 与实际包长差值 ∈ {0, 32}（0 无校验码，32 尾 32B 为 attachment）；
+   - N + payload_length（+ 附加校验码 attachment，启用安全扩展时）≤ MSS（1232），超限静默丢弃；
    - C=1 时 command 必须非 0；D=0 时 E 必须为 0；D=1 时 sn 必须非 0；E>0 时 `0 <= index < count` 且 count > 1；
 3. **上行校验违规**：B 必须为 1；target≠0 时 source 不能为 0；target 与 source 不能相等；
 4. **分拣**：target=0 → 管理线程；target/source 均非 0 → 转发线程。
@@ -45,7 +46,7 @@
 ### 3.2 转发校验链
 
 1. **来源检查**：按来源 socket 查分配表——
-   - 无记录 → "连接未确认"，回复 "FAIL"（受共享计数器限频）后丢弃；
+   - 无记录 → 先校验 32 字节附加校验码（缺失即静默丢弃），再回复 "FAIL"（受共享计数器限频，见安全文档 §9.1）后丢弃；
    - socket 匹配但 source bid 与记录不一致 → 伪造来源，丢弃；
 2. **附加校验**：带校验码的包用 `record.secret` 验证 HMAC-SHA256（**常量时间比较**，防时序侧信道，见安全文档 3 节），失败即丢弃；
 3. **离线分流**：记录 offline == true → 静默丢弃（不更新 last_time）；
@@ -70,7 +71,7 @@
 3. 按 command 走子流程：
    - "SYN?"：唯一允许 source bid = 0 的场景（分配/预订/内定，见 5 节）；加密模式须先校验上报 enigmas 与本地映射表交集（缺失/交集为空则静默丢弃、不进入分配），通过后分配/复用 bid 并从交集选密钥加密 secret（见安全文档 4.2、协议文档 7.3）；
    - "ACK!"：无状态 token 校验（`token_time` 须在 `handshake_token_timeout` 窗口内，超时静默丢弃、不创建记录）；基础模式无校验码，加密模式须带 HMAC 校验码（验证链见安全文档 4.2、协议文档 7.3）；通过后创建记录；
-   - 其余系统指令：先来源检查（socket 查表 → 无记录按连接未确认；不匹配按伪造丢弃）；再附加校验（HMAC，失败即丢弃）；再**离线分流**（记录 offline == true 且 command 不属于 "FIN?"/"NOOP" → 静默丢弃、不更新 last_time）；再更新 last_time，再指令集过滤（未知指令丢弃），最后按 command 执行；
+   - 其余系统指令：先来源检查（socket 查表 → 无记录按连接未确认，仅 PING/ACPT/DENY 三类指令会收到 "FAIL"；不匹配按伪造丢弃）；再附加校验（HMAC，失败即丢弃）；再**离线分流**（记录 offline == true 且 command 不属于 "FIN?"/"NOOP" → 静默丢弃、不更新 last_time）；再更新 last_time，再指令集过滤（未知指令丢弃），最后按 command 执行；
 4. 周期任务：应用密钥重载（见 6.4）。
 
 > last_time 仅在**来源检查、附加校验与离线分流全部通过后**更新；任何校验失败或离线期间被丢弃的包不得刷新活跃时间。
@@ -95,7 +96,7 @@ bid 为 32 位无符号整数，**全随机**生成：在 `0x00010000 ~ 0x7FFFFF
 
 客户端在 "SYN?" 预设 source bid（非 0）即走预订：
 
-- 预订 bid 必须大于 65535（不能预订内定区间）；
+- 预订 bid 必须大于 65535（例外：来源为 loopback 时，允许预订与其当前源端口号相同的 bid，即内定区间内的再预订；该 bid 已被占用同样回复 "FAIL"），不能预订内定区间中与自身端口不符的 bid；
 - H ≥ 32768 属于预留区间但服务器校验不拒绝；
 - 预订被占用/非法 → 回复 "FAIL"；
 - 预订成功 → "SYN!" 的 target 为预订 bid。
@@ -373,7 +374,7 @@ AView.accept(A.record);   // 槽主 A 命中 → value |= 1 写回（或 accept(
 | app_secret_file | （空） | 应用密钥文件路径（示例：`# app_secret_file = /etc/magpie/private/enigma.json`） |
 | app_secret_reload_interval | 600.0 | 应用密钥重读周期（秒） |
 | handshake_token_timeout | 60.0 | 握手 token 超时（秒；正常握手毫秒级完成，仅防重放与陈旧握手包） |
-| bid_allocation_retries | 16 | bid 随机分配冲突重试次数（视为服务器已满） |
+| bid_allocation_retries | 16 | bid 随机分配冲突重试次数（重试耗尽即回复 FAIL；不一定意味着服务器已满） |
 
 **规则说明**：
 

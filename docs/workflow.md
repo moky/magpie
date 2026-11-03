@@ -258,7 +258,7 @@ sequenceDiagram
 **"FAIL" 场景汇总**：
 
 1. 分配 bid 失败（预订被占用/非法、内定冲突、随机分配重试耗尽、记录总数已达上限 max_records）；
-2. 连接未确认（来源 socket 无记录）——受共享计数器限频（`reply_rate_limit`，10/s）；
+2. 连接未确认（来源 socket 无记录）——受共享计数器限频（`reply_rate_limit`，10/s），仅 PING/ACPT/DENY 三类指令会收到 FAIL（转发线程场景先校验 32 字节附加校验码），其余指令静默丢弃；
 3. 接收方离线/超时（target 记录 offline 或 `last_time` 超 `T_active` 60s）——带 src-command、src-target、time；
 4. 修改通行证失败（格式类错误整体拒绝，或状态类错误逐条跳过；载荷回显未成功的 bid 子集）。
 
