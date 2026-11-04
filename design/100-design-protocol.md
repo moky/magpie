@@ -35,6 +35,8 @@
 
 其中 index 和 count 的长度由 type 中的低 3 位决定。
 
+**字节序**：除单字节字段（type、header length）外，其余多字节字段——payload length(2B)、target/source bid(4B)、sn(4B)、index/count(E 字节)、command(4B)——一律按**网络字节序（大端）**存储与解析。command 的定义（将可读字符串按大端转为 32 位整数，见 110-design-type-cmd.md）即基于该约定；各语言 SDK 的 pack/parse 均须遵守。
+
 
 ### 1. Magic Code (固定4字节）
 

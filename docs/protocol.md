@@ -70,6 +70,8 @@
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
 
+> **字节序**：除单字节字段（type、header length）外，其余多字节字段——payload length(2B)、target/source bid(4B)、sn(4B)、index/count(E 字节)、command(4B)——一律按**网络字节序（大端）**存储与解析。
+
 ### 2.2 Magic Code（固定 4 字节）
 
 `['M', 'P', '\0', '\1']`，表示 _Messaging Protocol v1_。

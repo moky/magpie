@@ -1,7 +1,7 @@
 # Magpie Bridge（鹊桥项目）
 
 [![License](https://img.shields.io/github/license/moky/magpie)](https://github.com/moky/magpie/blob/main/LICENSE)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreeng)](https://github.com/moky/magpie/pulls)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](https://github.com/moky/magpie/pulls)
 [![Issues](https://img.shields.io/github/issues/moky/magpie)](https://github.com/moky/magpie/issues)
 [![Repo Size](https://img.shields.io/github/repo-size/moky/magpie)](https://github.com/moky/magpie/archive/refs/heads/main.zip)
 [![Tags](https://img.shields.io/github/tag/moky/magpie)](https://github.com/moky/magpie/tags)
@@ -12,8 +12,8 @@
 [![Followers](https://img.shields.io/github/followers/moky)](https://github.com/orgs/moky/followers)
 
 **基于 UDP 的可靠中继网络** —— **Magpie Bridge Messaging Protocol**（鹊桥通信协议），
-一个构建于 UDP 之上的应用层消息协议，支持桥接（服务器中转）与直连（点对点）两种模式，
-提供多语言 SDK 与可配置的中继服务器。
+一个构建于 UDP 之上的应用层消息协议，支持桥接（服务器中转）与直连（点对点）两种模式。
+本仓库提供该协议的 **Dart SDK**、**Python SDK 与中继服务器**，以及全部设计文档与规范。
 
 ## 特性
 
@@ -30,47 +30,29 @@
   "NOOP" 免疫窗口防恶意踢人。
 - **会话生命周期**：三次握手（`"SYN?"`/`"SYN!"`/`"ACK!"`）、心跳（`"PING"`/`"PONG"`）、
   两次挥手（`"FIN?"`/`"FIN!"`）、"NOOP" 自愈，以及超时回收桥接 id。
-- **多语言 SDK**：Java（`sdk-java/`）、Python（`sdk-py/`）与 Dart（`sdk-dart/`，规划中）。
-- **可配置服务器**：INI 配置线程数、限流、队列容量与内核 socket 缓冲区——保留默认值，
-  可通过 `--config` 覆盖。
+- **多语言 SDK**：Dart（`sdk-dart/`）与 Python（`sdk-py/`）。
+- **可配置服务器**：Python 中继服务器随 `sdk-py` 提供——INI 配置线程数、限流、
+  队列容量与内核 socket 缓冲区，保留默认值，可通过 `--config` 覆盖。
 
 ## 快速开始
 
 ### 1. 启动中继服务器
-
-Java：
-
-```bash
-cd server-java
-gradle run        # 默认监听 0.0.0.0:9527
-# 可选：gradle run --args='--config=/path/to/config.ini --log-dir=/path/to/logs'
-```
-
-Python：
 
 ```bash
 cd sdk-py
 python3 -m magpie_bridge.bridge.run    # 默认监听 0.0.0.0:9527
 ```
 
-### 2. 运行测试客户端
-
-先将 Java SDK 发布到本地 Maven 仓库（一次性）：
+### 2. 体验 Dart SDK
 
 ```bash
-cd sdk-java
-gradle publishToMavenLocal
+cd sdk-dart
+dart pub get
+dart run example/quick_check.dart    # 编解码 round-trip 自检
+dart test                            # 单元测试
 ```
 
-然后在两个终端分别运行两个示例客户端：
-
-```bash
-cd tests-java
-gradle :tests-java:clientA --args="--host 127.0.0.1 --port 9527"    # 终端 1（被动）
-gradle :tests-java:clientB --args="--host 127.0.0.1 --port 9527"    # 终端 2（主动）
-```
-
-每个客户端绑定 UDP，向服务器申请 bid，并通过服务器相互交换消息。
+安装（pub 依赖）、接口与签名示例见 [sdk-dart/README.md](sdk-dart/README.md)。
 
 ## 文档
 
@@ -83,6 +65,7 @@ gradle :tests-java:clientB --args="--host 127.0.0.1 --port 9527"    # 终端 2�
 | [docs/sdk.md](docs/sdk.md)                                    | SDK 使用者 —— 接口、工厂与解析器                   |
 | [docs/server.md](docs/server.md)                              | 服务器运维 —— 部署、配置与调优                     |
 | [docs/client.md](docs/client.md)                              | 示例应用 —— 测试客户端说明                         |
+| [sdk-dart/README.md](sdk-dart/README.md)                      | Dart SDK —— 安装、接口与示例                       |
 
 设计思路（[`design/`](design/)）中存放任务说明，docs/ 由前者生成。
 
