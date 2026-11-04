@@ -36,14 +36,27 @@
 
 ## 快速开始
 
-### 1. 启动中继服务器
+### 1. 安装
+
+```bash
+pip install magpie-bridge                # SDK（含 UDP 中继服务器）
+pip install magpie-bridge[enigma]        # 可选：加密握手所需的 cryptography
+```
+
+### 2. 启动中继服务器
+
+```bash
+magpie-bridge                            # 默认监听 0.0.0.0:9527
+```
+
+或从源码运行：
 
 ```bash
 cd sdk-py
-python3 -m magpie_bridge.bridge.run    # 默认监听 0.0.0.0:9527
+python3 -m magpie_bridge.bridge.run
 ```
 
-### 2. 体验 Dart SDK
+### 3. 体验 Dart SDK
 
 ```bash
 cd sdk-dart
@@ -52,7 +65,8 @@ dart run example/quick_check.dart    # 编解码 round-trip 自检
 dart test                            # 单元测试
 ```
 
-安装（pub 依赖）、接口与签名示例见 [sdk-dart/README.md](sdk-dart/README.md)。
+接口与签名示例见 [sdk-py/README.md](sdk-py/README.md)；
+Dart SDK 的说明见 [sdk-dart/README.md](sdk-dart/README.md)。
 
 ## 文档
 

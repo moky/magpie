@@ -358,23 +358,23 @@ AView.accept(A.record);   // 槽主 A 命中 → value |= 1 写回（或 accept(
 | forwarders | 8 | 转发线程数量（W） |
 | forward_limit_per_window | 4096 | 每窗口每线程最大转发任务数 |
 | forward_window | 0.1 | 滑动窗口时长（秒） |
-| waiting_queue_size | 4096 | 等待处理队列容量（任务数） |
-| manager_queue_size | 1024 | 管理请求队列容量（任务数） |
-| forwarder_queue_size | 65536 | 每条转发线程的队列容量（任务数；最坏约 64 MiB/线程，按满载荷 1KiB 计） |
+| record_active_timeout | 60.0 | 在线判定窗口 T_active（秒，1 分钟） |
 | record_expires | 86400.0 | 记录过期时间（秒，24h） |
 | record_recycle_interval | 600.0 | purge 最小调用间隔（秒，10 分钟；purge 只回收超 record_expires 的记录，全表扫描罕见且廉价） |
-| record_active_timeout | 60.0 | 在线判定窗口 T_active（秒，1 分钟） |
 | max_records | 65536 | 内存记录总数上限（比 IPv4 端口空间多 1，单台 IPv4 主机打不满；新建握手将创建记录时已达上限回 "FAIL"，仅内定流程豁免；已存在记录不受影响） |
+| allowlist_max_entries | 256 | 通行证列表上限（条目数；槽区长度 = 值 × 8 字节，IPv4/IPv6 槽同格式；超限条目跳过、回显失败子集） |
+| bid_allocation_retries | 16 | bid 随机分配冲突重试次数（重试耗尽即回复 FAIL；不一定意味着服务器已满） |
+| handshake_token_timeout | 60.0 | 握手 token 超时（秒；正常握手毫秒级完成，仅防重放与陈旧握手包） |
 | handshake_min_payload | 512 | 握手上行包最小载荷（防放大；"SYN!" 应答小于请求） |
 | unconfirmed_reply_buckets | 1024 | 共享配额桶数（按 hash("ip:port") % U 定位） |
 | reply_rate_limit | 10 | 未确认来源 "FAIL" 限频（次/秒/桶） |
-| allowlist_max_entries | 256 | 通行证列表上限（条目数；槽区长度 = 值 × 8 字节，IPv4/IPv6 槽同格式；超限条目跳过、回显失败子集） |
 | noop_immunity_window | 2.0 | "NOOP" 免疫窗口（秒；窗口内 "FIN?" 应答但不标记 offline） |
-| server_secret_rotate_interval | 600.0 | 服务器密钥轮换周期（秒，保留最近 2 把） |
 | app_secret_file | （空） | 应用密钥文件路径（示例：`# app_secret_file = /etc/magpie/private/enigma.json`） |
 | app_secret_reload_interval | 600.0 | 应用密钥重读周期（秒） |
-| handshake_token_timeout | 60.0 | 握手 token 超时（秒；正常握手毫秒级完成，仅防重放与陈旧握手包） |
-| bid_allocation_retries | 16 | bid 随机分配冲突重试次数（重试耗尽即回复 FAIL；不一定意味着服务器已满） |
+| server_secret_rotate_interval | 600.0 | 服务器密钥轮换周期（秒，保留最近 2 把） |
+| waiting_queue_size | 4096 | 等待处理队列容量（任务数） |
+| manager_queue_size | 1024 | 管理请求队列容量（任务数） |
+| forwarder_queue_size | 65536 | 每条转发线程的队列容量（任务数；最坏约 64 MiB/线程，按满载荷 1KiB 计） |
 
 **规则说明**：
 
@@ -393,11 +393,9 @@ port = 9527
 # UDP receive buffer size of the kernel socket (bytes, default: 4194304 = 4 MB)
 socket_buffer_length = 4194304
 
-# threads: forwarder thread count W (default: 8)
+# forward threads
 forwarders = 8
-# forwarder rate limit: max packets processed per window (default: 4096)
 forward_limit_per_window = 4096
-# forwarder rate limit window (seconds, default: 0.1)
 forward_window = 0.1
 
 # bid record
@@ -415,14 +413,12 @@ unconfirmed_reply_buckets = 1024
 reply_rate_limit = 10
 noop_immunity_window = 2.0
 
-# app secret (enigma); unset/empty/missing/unparsable/empty secrets -> non-encrypted mode
-# app_secret_file = /etc/magpie/private/enigma.json
-app_secret_file =
+# secrets
+app_secret_file = /etc/magpie/private/enigma.json
 app_secret_reload_interval = 600.0
-
 server_secret_rotate_interval = 600.0
 
-# queues (tasks)
+# task queue
 waiting_queue_size = 4096
 manager_queue_size = 1024
 forwarder_queue_size = 65536
