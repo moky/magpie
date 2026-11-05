@@ -28,7 +28,6 @@
 # SOFTWARE.
 # ==============================================================================
 
-import json
 import socket
 import threading
 import time
@@ -39,7 +38,7 @@ from ..bridge_factory import BridgePacketFactory
 from ..protocol import Command, Magpie
 from ..reliable import ReliablePacket
 
-from .utils import SocketAddress
+from .utils import SocketAddress, utf8_encode, json_encode
 from .utils import SharedCounters
 from .utils import log
 
@@ -136,9 +135,9 @@ class Worker(ABC):
             return
         if not self.__counters.hit(address.key()):
             return
-        response = json.dumps({
+        response = utf8_encode(json_encode({
             'src-command': '%08X' % packet.command,
             'time': time.time(),
-        }).encode('utf-8')
+        }))
         fail = self.packet_factory.fail(response, target=0)
         self.send(address=address, data=fail.pack())

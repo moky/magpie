@@ -28,7 +28,6 @@
 # SOFTWARE.
 # ==============================================================================
 
-import json
 import queue
 import socket
 import time
@@ -38,7 +37,7 @@ from typing import Dict
 from ..protocol import Magpie
 from ..reliable import ReliablePacket
 
-from .utils import log
+from .utils import log, utf8_encode, json_encode
 from .utils import SocketAddress, SharedCounters
 from .config import ServerConfig
 from .bid_manager import BidManager
@@ -192,8 +191,8 @@ class Forwarder(Worker):
         Returns:
             the JSON payload bytes.
         """
-        return json.dumps({
+        return utf8_encode(json_encode({
             'src-command': '%08X' % packet.command,
             'src-target': packet.target,
             'time': time.time(),
-        }).encode('utf-8')
+        }))

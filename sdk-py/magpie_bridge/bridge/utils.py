@@ -30,7 +30,6 @@
 
 import base64
 import hashlib
-import hmac as hmac_module
 import json
 import logging
 import time
@@ -42,6 +41,82 @@ from ..x import HmacSha256
 log = logging.getLogger('magpie_bridge')
 
 
+def utf8_encode(s: str) -> bytes:
+    """ Encode a string as UTF-8 bytes. """
+    return s.encode('utf-8')
+
+
+def utf8_decode(d: bytes) -> Optional[str]:
+    """ Decode UTF-8 bytes; undecodable bytes are replaced with U+FFFD.
+
+        Returns None when `d` is not a bytes-like object.
+    """
+    try:
+        return d.decode('utf-8', errors='replace')
+    except (UnicodeDecodeError, AttributeError):
+        return None
+
+
+def hex_encode(d: bytes) -> str:
+    return d.hex()
+
+
+def hex_decode(s: str) -> Optional[bytes]:
+    try:
+        return bytes.fromhex(s)
+    except ValueError:
+        return None
+
+
+def base64_encode(d: bytes) -> str:
+    """ Encode bytes as a Base64 (ASCII) string. """
+    b64 = base64.b64encode(d)
+    return b64.decode('ascii')
+
+
+def base64_decode(s: str) -> Optional[bytes]:
+    """ Decode a Base64 (ASCII) string.
+
+        Returns None when `s` is not valid Base64 (e.g. forged input with
+        broken padding), so callers can drop it like any other malformed
+        field instead of crashing.
+    """
+    try:
+        return base64.b64decode(s)
+    except (ValueError, TypeError):
+        return None
+
+
+def json_encode(o: Dict[str, Any]) -> str:
+    """Serialize a dict to a JSON string.
+
+        Args:
+            o: the dict to serialize.
+
+        Returns:
+            the JSON string.
+    """
+    return json.dumps(o)
+
+
+def json_decode(s: str) -> Optional[Dict[str, Any]]:
+    """Parse the leading JSON object from a string, ignoring trailing
+    garbage (same lenient behaviour as parse_json).
+
+        Args:
+            s: the JSON string.
+
+        Returns:
+            the parsed dict, or None when `s` is not valid JSON.
+    """
+    # return json.load(s)
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(s)
+        return obj
+    except ValueError:
+        return None
+
+
 def parse_json(payload: Optional[bytes]) -> Optional[Dict[str, Any]]:
     """Parse the leading JSON object, ignoring trailing padding bytes.
 
@@ -50,23 +125,16 @@ def parse_json(payload: Optional[bytes]) -> Optional[Dict[str, Any]]:
     garbage. Clients pad handshake payloads to 512 bytes with raw bytes,
     so we must mirror the lenient behaviour.
     """
-    if not payload:
-        return None
-    try:
-        text = payload.decode('utf-8', errors='replace')
-    except (UnicodeDecodeError, AttributeError):
-        return None
-    try:
-        obj, _ = json.JSONDecoder().raw_decode(text)
-        return obj
-    except ValueError:
-        return None
+    text = utf8_decode(payload)
+    if text:
+        return json_decode(text)
 
 
 def socket_identity_hash(socket_key: str) -> int:
     """31-bit identity hash of a socket: SHA-256(key) truncated to 32 bits,
     bit0 cleared (bit0 is reused as the permit valid flag)."""
-    digest = hashlib.sha256(socket_key.encode('utf-8')).digest()
+    data = utf8_encode(socket_key)
+    digest = hashlib.sha256(data).digest()
     return int.from_bytes(digest[:4], 'big') & 0xFFFFFFFE
 
 
@@ -74,24 +142,30 @@ def socket_identity_hash(socket_key: str) -> int:
 #   handshake token
 #
 
+def _concat_token(bid: int, secret: str, socket: str) -> bytes:
+    text = f'bid={bid}&secret={secret}&socket={socket}'
+    return utf8_encode(text)
+
+
 def generate_token(token_key: bytes,
                    bid: int, secret_b64: str, socket_key: str) -> str:
     """token = Base64(HMAC-SHA256(token_key,
        "bid={bid}&secret={secret}&socket={socket}"))
        fields are merged in key alphabetical order."""
-    text = 'bid=%d&secret=%s&socket=%s' % (bid, secret_b64, socket_key)
-    data = text.encode('utf-8')
-    tag = HmacSha256.generate(token_key, data)
-    b64 = base64.b64encode(tag)
-    return b64.decode('ascii')
+    data = _concat_token(bid=bid, secret=secret_b64, socket=socket_key)
+    tag = HmacSha256.generate(key=token_key, data=data)
+    return base64_encode(tag)
 
 
 def verify_token(token: str, token_keys: Sequence[bytes],
                  bid: int, secret_b64: str, socket_key: str) -> bool:
     """Recompute and compare against all known token keys (up to 2)."""
+    tag = base64_decode(token)
+    if tag is None:
+        return False
+    data = _concat_token(bid=bid, secret=secret_b64, socket=socket_key)
     for key in token_keys:
-        candidate = generate_token(key, bid, secret_b64, socket_key)
-        if hmac_module.compare_digest(candidate, token):
+        if HmacSha256.verify(key=key, data=data, tag=tag):
             return True
     return False
 

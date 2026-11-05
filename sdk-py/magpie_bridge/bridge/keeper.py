@@ -28,13 +28,12 @@
 # SOFTWARE.
 # ==============================================================================
 
-import base64
 import os
 import random
 import threading
 from typing import Optional, Tuple, List, Dict, Any
 
-from .utils import log, generate_token, verify_token
+from .utils import log, base64_encode, base64_decode, generate_token, verify_token
 from .config import ServerConfig
 from .enigma import Enigma
 
@@ -75,7 +74,7 @@ class SecretKeeper:
         Returns:
             the base64 string.
         """
-        return base64.b64encode(secret).decode('ascii')
+        return base64_encode(secret)
 
     # noinspection PyMethodMayBeStatic
     def decode_secret(self, secret_b64: str) -> Optional[bytes]:
@@ -87,7 +86,7 @@ class SecretKeeper:
         Returns:
             the raw secret bytes.
         """
-        return base64.b64decode(secret_b64)
+        return base64_decode(secret_b64)
 
     #
     #   Enigma
@@ -196,11 +195,11 @@ class SecretKeeper:
         # decrypt
         return Enigma.decrypt(
             ikm=ikm,
-            salt=base64.b64decode(bundle['hkdf']['salt']),
-            info=base64.b64decode(bundle['hkdf']['info']),
-            nonce=base64.b64decode(bundle['nonce']),
-            ciphertext=base64.b64decode(secret_b64),
-            tag=base64.b64decode(bundle['tag'])
+            salt=base64_decode(bundle['hkdf']['salt']),
+            info=base64_decode(bundle['hkdf']['info']),
+            nonce=base64_decode(bundle['nonce']),
+            ciphertext=base64_decode(secret_b64),
+            tag=base64_decode(bundle['tag'])
         )
 
     #

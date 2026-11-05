@@ -28,7 +28,6 @@
 # SOFTWARE.
 # ==============================================================================
 
-import hashlib
 import hmac as hmac_module
 
 from abc import ABC, abstractmethod
@@ -84,31 +83,13 @@ class _StdlibMacGenerator(MacGenerator):
 
     # Override
     def generate(self, key: bytes, data: bytes) -> bytes:
-        return hmac_module.new(key, data, hashlib.sha256).digest()
+        # return hmac_module.new(key, data, hashlib.sha256).digest()
+        return hmac_module.digest(key, data, 'sha256')
 
     # Override
     def verify(self, key: bytes, data: bytes, tag: bytes) -> bool:
         computed = self.generate(key=key, data=data)
-        return _constant_time_eq(a=tag, b=computed)
-
-
-def _constant_time_eq(a: bytes, b: bytes) -> bool:
-    """ Constant-time byte comparison (defends against timing attacks).
-
-        Args:
-            a: first byte string.
-            b: second byte string.
-
-        Returns:
-            True if both strings are equal, False otherwise.
-    """
-    size = len(a)
-    if size != len(b):
-        return False
-    diff = 0
-    for i in range(size):
-        diff |= (a[i] ^ b[i])
-    return diff == 0
+        return hmac_module.compare_digest(tag, computed)
 
 
 class HmacSha256:

@@ -28,10 +28,10 @@
 # SOFTWARE.
 # ==============================================================================
 
-import base64
-import json
 import os
 from typing import Optional, Dict
+
+from .utils import base64_encode, base64_decode, hex_decode, json_decode
 
 #
 #   optional cryptography dependency
@@ -77,8 +77,11 @@ class Enigma:
             return {}
         try:
             with open(path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except (IOError, OSError, ValueError):
+                data = json_decode(f.read())
+        except (IOError, OSError):
+            return None
+        if data is None:
+            # unparsable file: callers keep their previous table
             return None
         enigmas = data.get('enigma')
         if not isinstance(enigmas, dict):
@@ -99,17 +102,10 @@ class Enigma:
 
     @staticmethod
     def _decode(value: str) -> Optional[bytes]:
-        if value.startswith('hex,'):
-            try:
-                return bytes.fromhex(value[4:])
-            except ValueError:
-                return None
         if value.startswith('base64,'):
-            try:
-                return base64.b64decode(value[7:])
-            except (ValueError, TypeError):
-                return None
-        return None
+            return base64_decode(value[7:])
+        elif value.startswith('hex,'):
+            return hex_decode(value[4:])
 
     @staticmethod
     def encrypt(ikm: bytes, plaintext: bytes, bid: int) -> Dict[str, str]:
@@ -130,11 +126,11 @@ class Enigma:
         ciphertext = ciphertext_and_tag[:-16]
         tag = ciphertext_and_tag[-16:]
         return {
-            'salt': base64.b64encode(salt).decode('ascii'),
-            'info': base64.b64encode(info).decode('ascii'),
-            'nonce': base64.b64encode(nonce).decode('ascii'),
-            'tag': base64.b64encode(tag).decode('ascii'),
-            'ciphertext': base64.b64encode(ciphertext).decode('ascii'),
+            'salt': base64_encode(salt),
+            'info': base64_encode(info),
+            'nonce': base64_encode(nonce),
+            'tag': base64_encode(tag),
+            'ciphertext': base64_encode(ciphertext),
         }
 
     @staticmethod

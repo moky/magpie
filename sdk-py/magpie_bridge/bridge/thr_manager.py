@@ -28,7 +28,6 @@
 # SOFTWARE.
 # ==============================================================================
 
-import json
 import queue
 import socket
 import time
@@ -37,7 +36,7 @@ from typing import Optional, Any, List
 from ..protocol import Command, Magpie
 from ..reliable import ReliablePacket
 
-from .utils import log
+from .utils import log, utf8_encode, json_encode
 from .utils import parse_json
 from .utils import SocketAddress, SharedCounters
 
@@ -229,7 +228,7 @@ class Manager(Worker):
         }
         if enigma_bundle is not None:
             body['enigma'] = enigma_bundle
-        response = json.dumps(body).encode('utf-8')
+        response = utf8_encode(json_encode(body))
         # anti-amplification: the "SYN!" reply must stay below
         # handshake_min_payload regardless of the actual request size
         assert len(response) < self.__config.handshake_min_payload, \
@@ -344,7 +343,7 @@ class Manager(Worker):
         """
         info = parse_json(packet.payload) or {}
         info['time'] = time.time()
-        response = json.dumps(info).encode('utf-8')
+        response = utf8_encode(json_encode(info))
         pong = self.packet_factory.pong(packet=packet, response=response)
         pong = pong.sign(secret=record.secret)
         self.send(address=address, data=pong.pack())
@@ -361,7 +360,7 @@ class Manager(Worker):
         if now - record.last_noop_time >= self.__config.noop_immunity_window:
             record.set_offline()
             log.warning('offline record: bid=%d, socket=%s', record.bid, address)
-        response = json.dumps({'time': now}).encode('utf-8')
+        response = utf8_encode(json_encode({'time': now}))
         fin_ack = self.packet_factory.fin_ack(packet=packet, response=response)
         fin_ack = fin_ack.sign(secret=record.secret)
         self.send(address=address, data=fin_ack.pack())
@@ -379,11 +378,11 @@ class Manager(Worker):
             return
         if sources == [1, 2, 3]:
             cleared = record.allow_all()
-            response = json.dumps({
+            response = utf8_encode(json_encode({
                 'src-command': '41435054',
                 'sources': cleared,
                 'time': time.time(),
-            }).encode('utf-8')
+            }))
             done = self.packet_factory.done(response, target=record.bid)
             done = done.sign(secret=record.secret)
             self.send(address=address, data=done.pack())
@@ -393,9 +392,11 @@ class Manager(Worker):
         format_bad = [y for y in sources
                       if not isinstance(y, int) or y <= 0 or y == record.bid]
         if format_bad:
-            response = json.dumps({'src-command': '41435054',
-                                   'sources': format_bad,
-                                   'time': time.time()}).encode('utf-8')
+            response = utf8_encode(json_encode({
+                'src-command': '41435054',
+                'sources': format_bad,
+                'time': time.time()
+            }))
             fail = self.packet_factory.fail(response, target=record.bid)
             fail = fail.sign(secret=record.secret)
             self.send(address=address, data=fail.pack())
@@ -411,14 +412,20 @@ class Manager(Worker):
                 failed.append(y)
         cmd = '41435054'
         if failed:
-            response = json.dumps({'src-command': cmd, 'sources': failed,
-                                  'time': time.time()}).encode('utf-8')
+            response = utf8_encode(json_encode({
+                'src-command': cmd,
+                'sources': failed,
+                'time': time.time()
+            }))
             fail = self.packet_factory.fail(response, target=record.bid)
             fail = fail.sign(secret=record.secret)
             self.send(address=address, data=fail.pack())
         else:
-            response = json.dumps({'src-command': cmd, 'sources': ok,
-                                  'time': time.time()}).encode('utf-8')
+            response = utf8_encode(json_encode({
+                'src-command': cmd,
+                'sources': ok,
+                'time': time.time()
+            }))
             done = self.packet_factory.done(response, target=record.bid)
             done = done.sign(secret=record.secret)
             self.send(address=address, data=done.pack())
@@ -479,11 +486,11 @@ class Manager(Worker):
             return
         if sources == [1, 2, 3]:
             cleared = record.clear_permits()
-            response = json.dumps({
+            response = utf8_encode(json_encode({
                 'src-command': '44454E59',
                 'sources': cleared,
                 'time': time.time(),
-            }).encode('utf-8')
+            }))
             done = self.packet_factory.done(response, target=record.bid)
             done = done.sign(secret=record.secret)
             self.send(address=address, data=done.pack())
@@ -491,11 +498,11 @@ class Manager(Worker):
             return
         # wildcard mode: directional DENY always fails
         if record.is_allow_all():
-            response = json.dumps({
+            response = utf8_encode(json_encode({
                 'src-command': '44454E59',
                 'sources': list(sources),
                 'time': time.time(),
-            }).encode('utf-8')
+            }))
             fail = self.packet_factory.fail(response, target=record.bid)
             fail = fail.sign(secret=record.secret)
             self.send(address=address, data=fail.pack())
@@ -506,9 +513,11 @@ class Manager(Worker):
         format_bad = [y for y in sources
                       if not isinstance(y, int) or y <= 0 or y == record.bid]
         if format_bad:
-            response = json.dumps({'src-command': '44454E59',
-                                   'sources': format_bad,
-                                   'time': time.time()}).encode('utf-8')
+            response = utf8_encode(json_encode({
+                'src-command': '44454E59',
+                'sources': format_bad,
+                'time': time.time()
+            }))
             fail = self.packet_factory.fail(response, target=record.bid)
             fail = fail.sign(secret=record.secret)
             self.send(address=address, data=fail.pack())
@@ -519,8 +528,11 @@ class Manager(Worker):
         for y in sources:
             record.remove_permit(bid=y)
             removed.append(y)
-        response = json.dumps({'src-command': '44454E59', 'sources': removed,
-                              'time': time.time()}).encode('utf-8')
+        response = utf8_encode(json_encode({
+            'src-command': '44454E59',
+            'sources': removed,
+            'time': time.time()
+        }))
         done = self.packet_factory.done(response, target=record.bid)
         done = done.sign(secret=record.secret)
         self.send(address=address, data=done.pack())
@@ -557,6 +569,6 @@ class Manager(Worker):
             address: the source socket address.
             target: the bid to put in the reply target.
         """
-        response = json.dumps({'time': time.time()}).encode('utf-8')
+        response = utf8_encode(json_encode({'time': time.time()}))
         fail = self.packet_factory.fail(response, target=target)
         self.send(address=address, data=fail.pack())
