@@ -225,7 +225,7 @@ bid 与 socket 绑定（socket 即身份，见架构文档）；若某 record �
 > 所以这里只能通过 `handshake_min_payload` 限制放大攻击。
 
 当收到第1次握手包 "SYN?" 时，服务器需要生成 secret 和 token 然后以 "SYN!" 回复客户端；
-同样地，当收到第3次握手包 "ACK!" 时，服务器也要做一系列的处理：token 校验、token_time 时效、attachment 校验等安全校验失败一律静默丢弃、不应答；仅容量已满、bid 竞态冲突等业务性拒绝才回复 "FAIL" 通知客户端（处理分支见架构文档 2.2）；
+同样地，当收到第3次握手包 "ACK!" 时，服务器也要做一系列的处理：token 校验、attachment 校验等安全校验失败一律静默丢弃、不应答；仅容量已满、bid 竞态冲突等业务性拒绝才回复 "FAIL" 通知客户端（处理分支见架构文档 2.2）；
 为了防止放大攻击，这里需要增加一个判断条件：
 
 当管理线程从**管理请求队列**中取得一个任务，并判断 command == "SYN?" 或者 "ACK!" 的时候，
@@ -250,7 +250,7 @@ bid 与 socket 绑定（socket 即身份，见架构文档）；若某 record �
 - hkdf.info：`enigma-v1:bid=` + 最长 10 位 bid（共 24 字节）→ Base64 32 字符；
 - nonce：12 字节一次性 CSPRNG → Base64 16 字符；
 - tag：16 字节 GCM 认证标签 → Base64 24 字符；
-- enigma.key（6 字符）、algorithm（28 字符）、aad（空），token_time/time/UDP 与基础模式相同；连同 JSON 字段名与标点，压缩后载荷 ≤ 400 字节；
+- enigma.key（6 字符）、algorithm（28 字符）、aad（空），time/UDP 与基础模式相同；连同 JSON 字段名与标点，压缩后载荷 ≤ 400 字节；
 - 整包 = Header 20 + Payload ≤ 400 + UDP/IPv4 28 ≤ 448 字节。
 
 由上表可见，基础模式两组数据包的放大比分别是 0.429（240/560）和 0.12（67/560）；

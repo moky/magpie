@@ -85,7 +85,7 @@ mid = (sn << 32) | index
 - 载荷含 src-command（回显被拒绝的 command，十六进制编码）时，再按其余字段区分：
 	- src-target 存在时：对端离线（src-target 即收件人 bid），通知上层即可，无需重试；
 	- sources 存在时（无 src-target）：无法修改通行证（"ACPT"/"DENY" 被拒），剔除 sources 中的失败子集重试或放弃；
-	- 两者皆无（仅 src-command 与 time）：连接未确认，直接补发 "ACK!"（幂等，token 未过期），无需重新握手；
+	- 两者皆无（仅 src-command 与 time）：连接未确认，直接补发 "ACK!"（幂等，token 未失效，有效期约 1~2 分钟），无需重新握手；
 
 注意：无附加校验码的 "FAIL"（bid 分配失败、连接未确认——记录未创建时服务器无 secret 可计算校验码）可被攻击者伪造，只能诱导客户端补发 "ACK!" 或重新握手，客户端处理须幂等、无副作用。
 

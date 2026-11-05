@@ -275,7 +275,7 @@ class BridgePacketFactory {
     );
     
     /// 第二次握手
-    /// response 为载荷数据区（含 secret/token/token_time/UDP/time，
+    /// response 为载荷数据区（含 secret/token/UDP/time，
     /// 由服务器逻辑构造，纯 JSON 格式）
     BridgePacket synAck(Uint8List response, {
         required int target,  // 服务器为该客户端分配的 bid
@@ -295,7 +295,7 @@ class BridgePacketFactory {
     );
     
     /// 第三次握手
-    /// response 原样回传第二次握手包中的 secret/token/token_time
+    /// response 原样回传第二次握手包中的 secret/token
     /// （数据区 time 取客户端当前时间），纯 JSON 格式
     BridgePacket ack(Uint8List response, {
         required int source,  // 从第二次握手包中得到的 target

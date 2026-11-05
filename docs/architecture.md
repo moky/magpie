@@ -180,9 +180,9 @@ bid 为 32 位无符号整数，采用**全随机**方式生成：在 `0x0001000
 - **purge 回收**：`last_time` 超过 `record_expires`（默认 24 小时）的记录由管理线程周期回收（`record_recycle_interval`，默认 10 分钟），先反向清理所有引用被回收 bid 的通行证条目（对方记录中的残留条目，见 8 节）再删除记录（同时删除两个索引）；收集无锁（记录分配表结构仅管理线程增删），逐条删除持短锁；记录数仍 ≥ `max_records × 0.8` 时，回收阈值逐轮减半至 `record_active_timeout`（60 秒），仍超限则判定高负荷（紧急自救，见服务器文档 6.3）；
 - **不做惰性回收**：按 bid/socket 查询分配表时不检查是否过期，记录存在即按有效处理；过期回收统一由 purge 完成。
 
-### 6.4 服务器密钥与 Token
+### 6.4 Token 密钥与握手令牌
 
-- **服务器密钥 server_secret**：仅用于生成/校验 Token，只保存在服务器内存，10 分钟轮换一次（`server_secret_rotate_interval`），保留最近 2 个密钥用于校验；
+- **Token 密钥 token_key**：仅用于生成/校验 Token，只保存在服务器内存；管理线程主循环周期检查轮换（约每 0.05s 一次），间隔 `token_key_rotate_interval`（默认 60 秒），保留最近 2 把密钥用于校验；
 - **客户端密钥 secret**：服务器生成，通过握手发给客户端，握手成功后所有系统指令用此密钥签名/验签；在 record 生命周期内永不改变；
 - 两种密钥均须用密码学安全随机数生成。
 
@@ -192,12 +192,11 @@ bid 为 32 位无符号整数，采用**全随机**方式生成：在 `0x0001000
 1. 取得 bid（新建/内定/预订/复用）十进制正整数
 2. 取得 secret（复用则取原 record.secret，否则随机生成，Base64 编码；加密模式下以加密后的密文 ciphertext 作为参与计算的 secret，见协议文档）
 3. 观察得到客户端 socket "{ip}:{port}"
-4. 取服务器当前时间戳 time（秒）
-5. 按 key 字典序排序合并 "bid={bid}&secret={secret}&socket={socket}&time={time}"
-6. 取最新 server_secret 计算 HMAC-SHA256，Base64 编码
+4. 按 key 字典序排序合并 "bid={bid}&secret={secret}&socket={socket}"
+5. 取最新 token_key 计算 HMAC-SHA256，Base64 编码
 ```
 
-**Token 校验**：取协议头 source bid、观察到的 socket、载荷 "secret" 与 "token_time"，重算并逐个与全部服务器密钥（最多 2 个）比对，任一匹配即通过；`token_time` 须在 `handshake_token_timeout`（默认 60s）有效窗口内，超时静默丢弃、不创建记录（防重放/陈旧握手包，见安全文档 4.2）。
+**Token 校验**：取协议头 source bid、观察到的 socket 与载荷 "secret"，按 key 字典序排序合并 "bid={bid}&secret={secret}&socket={socket}"，用保留的全部 Token 密钥（最多 2 把）逐个重算、任一匹配即通过；全部不匹配则判定为不可信来源，静默丢弃、不创建记录（防重放/陈旧握手包，见安全文档 4.2）。旧 token 在其签名密钥被轮换出组前仍可验证。
 
 ---
 
@@ -215,11 +214,11 @@ sequenceDiagram
     C->>P: "SYN?"（source=0 或预订 bid，载荷≥512B）
     P->>M: target=0 → 管理请求队列
     M->>M: 分配/复用/内定/预订 bid + 生成 secret + 计算 token
-    M-->>C: "SYN!"（target=新 bid，载荷含 secret/token/token_time）
+    M-->>C: "SYN!"（target=新 bid，载荷含 secret/token）
     C->>C: 保存 secret
-    C->>P: "ACK!"（source=新 bid；基础模式原样回传 3 参数，加密模式回传 enigma 参数 + 密文 secret + 校验码）
+    C->>P: "ACK!"（source=新 bid；基础模式原样回传 2 参数，加密模式回传 enigma 参数 + 密文 secret + 校验码）
     P->>M: 管理请求队列
-    M->>M: token 校验（token_time 超时静默丢弃）→ 创建 bid record（两套索引）
+    M->>M: token 校验（不匹配即静默丢弃）→ 创建 bid record（两套索引）
     M-->>C: （连接建立，可开始转发）
 ```
 

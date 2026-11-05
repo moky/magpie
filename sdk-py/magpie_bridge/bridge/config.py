@@ -51,7 +51,6 @@ class ServerConfig:
         'allowlist_max_entries': '256',
         'bid_allocation_retries': '16',
         # security
-        'handshake_token_timeout': '60.0',
         'handshake_min_payload': '512',
         'unconfirmed_reply_buckets': '1024',
         'reply_rate_limit': '10',
@@ -59,7 +58,7 @@ class ServerConfig:
         # secrets
         'app_secret_file': '',
         'app_secret_reload_interval': '600.0',
-        'server_secret_rotate_interval': '600.0',
+        'token_key_rotate_interval': '60.0',
         # task queue
         'waiting_queue_size': '4096',
         'manager_queue_size': '1024',
@@ -169,10 +168,6 @@ class ServerConfig:
     #
 
     @property
-    def handshake_token_timeout(self) -> float:
-        return self.get_float(key='handshake_token_timeout')
-
-    @property
     def handshake_min_payload(self) -> int:
         return self.get_int(key='handshake_min_payload')
 
@@ -201,8 +196,8 @@ class ServerConfig:
         return self.get_float(key='app_secret_reload_interval')
 
     @property
-    def server_secret_rotate_interval(self) -> float:
-        return self.get_float(key='server_secret_rotate_interval')
+    def token_key_rotate_interval(self) -> float:
+        return self.get_float(key='token_key_rotate_interval')
 
     #
     #   Task Queue

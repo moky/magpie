@@ -37,7 +37,7 @@
 		- 分配 bid 与生成客户端密钥 secret、握手 token 等步骤见架构设计文档；
 		- 此阶段服务器**不创建任何新记录**（无状态），新记录在 "ACK!" 验证通过后才创建；
 	- **【确认阶段】**如果 command 是 "ACK!"，则为第三次握手（无状态验证）：
-		- 检查校验 token 信息、查询 bid record 分配表等步骤见架构设计文档；**token 全部密钥均不匹配、或 token_time 超出 `handshake_token_timeout` 窗口时，静默丢弃、不应答、不创建记录**（无状态令牌验证失败不回复 "FAIL"）；仅新建记录时已达 `max_records` 容量上限、以及已存在记录与当前 socket 竞态冲突这两种合法场景才回复 "FAIL"（见架构文档 2.2）；
+		- 检查校验 token 信息、查询 bid record 分配表等步骤见架构设计文档；**token 全部密钥均不匹配时，静默丢弃、不应答、不创建记录**（无状态令牌验证失败不回复 "FAIL"）；仅新建记录时已达 `max_records` 容量上限、以及已存在记录与当前 socket 竞态冲突这两种合法场景才回复 "FAIL"（见架构文档 2.2）；
 		- 直到这一步结束，新的 bid record 才会被创建；
 	- **【服务阶段】**如果是其他系统指令（要求 source bid > 0）：source bid 为 0 属于上行校验违规，直接丢弃；
 		- 先做来源检查（见架构设计文档）：连接未确认则按安全提案的条件回复 "FAIL"（仅 PING/ACPT/DENY 三类指令，且应答受共享计数器限频，见安全提案）再丢弃；source bid 不匹配则直接丢弃；
@@ -253,7 +253,7 @@ AView.accept(A.record);   // 槽主 A 命中 → value |= 1 写回（或 accept(
 
 服务器收到握手请求（"SYN?" 指令）时分配 bid；
 
-客户端收到 "SYN!" 后，在 "ACK!" 中原样回传 secret、token 与 token_time，服务器验证通过后创建记录（见管理线程职责）；
+客户端收到 "SYN!" 后，在 "ACK!" 中原样回传 secret 与 token，服务器验证通过后创建记录（见管理线程职责）；
 若 "ACK!" 丢失，客户端在发送下一个包时因服务器查不到 bid record 而收到 "FAIL"（连接未确认），据此补发 "ACK!" 或重新握手。
 
 > 每次创建分配记录时，都需要同时建立两个索引（分别以 bid、socket 信息为 key）指向该记录，以方便后面查询。
@@ -294,12 +294,14 @@ AView.accept(A.record);   // 槽主 A 命中 → value |= 1 写回（或 accept(
         return False
 ```
 
-### 服务器密钥轮换与握手防洪
+### Token 密钥轮换与握手防洪
 
-服务器内部维护一个**密钥组 server_secrets**（列表，初始化时包含一个随机密钥，须用密码学安全随机数）与最后生成时间 last_secret_time，用于计算/验证握手令牌 token：
+服务器内部维护一个**密钥组 token_keys**（列表，初始化时包含一个随机密钥，须用密码学安全随机数）与最后轮换时间 last_token_key_rotate，用于计算/验证握手令牌 token：
 
-- 生成 token 时：若 ```now - last_secret_time > server_secret_rotate_interval```（默认 600 秒），生成一个新随机密钥并成为最新密钥、更新 last_secret_time，仅保留最近 2 个密钥，然后取最新密钥计算（存储位置不绑定实现：Java 版以显式 newest 字段记录，Python 版可按自身数据结构维护新旧次序）；
-- 验证 token 时：取出全部密钥（最多 2 个）逐个重算比对，任一匹配即通过（旧 token 在旧密钥被轮换出列表之前仍可验证）。
+- 管理线程主循环周期检查轮换（约每 0.05s 一次）：若 ```now - last_token_key_rotate > token_key_rotate_interval```（默认 60 秒），生成一个新随机密钥并成为最新密钥、更新 last_token_key_rotate，仅保留最近 2 把（存储位置不绑定实现：Java 版以显式 newest 字段记录，Python 版可按自身数据结构维护新旧次序）；新 token 由最新密钥签发；
+- 验证 token 时：对密钥组中保留的密钥逐个重算比对，任一匹配即通过（旧 token 在其签名密钥被轮换出组前仍可验证）。
+
+token 有效期约 1~2 分钟，由密钥组轮换天然限定。
 
 由于 "SYN?" 阶段不创建任何记录，握手洪流不产生任何共享状态、不占用内存，
 防洪策略见安全提案。
@@ -349,7 +351,6 @@ AView.accept(A.record);   // 槽主 A 命中 → value |= 1 写回（或 accept(
 - `handshake_min_payload`："SYN?"/"ACK!" 最小载荷长度，握手防洪防放大，规则见架构文档与载荷文档；
 - `unconfirmed_reply_buckets`：未确认来源 FAIL 回复共享计数器的分桶数；
 - `reply_rate_limit`：每桶每秒允许的未确认 FAIL 回复上限，超限静默丢弃；限频范围与流程见架构文档"连接未确认"分支与安全提案；
-- `handshake_token_timeout`："ACK!" token_time 允许的陈旧窗口，超窗静默丢弃、不创建记录（架构文档 2.2）；
 - `app_secret_file`：应用密钥（enigma）JSON 文件路径，空值表示非加密模式，格式与重载规则见安全提案（MIP 加密章节）；
 - `app_secret_reload_interval`：管理线程重读 `app_secret_file` 的周期；
 - `waiting_queue_size`：接收线程 → 预处理线程队列容量；

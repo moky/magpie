@@ -84,7 +84,7 @@ class BridgePacketFactory(MessagePacketFactory):
         """ 3rd handshake (ACK!, A=1): client confirms the established session.
 
             Args:
-                response: echoes back secret/token/token_time from the SYN!.
+                response: echoes back secret/token from the SYN!.
                 source: client's bridge id.
 
             Returns:

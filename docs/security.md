@@ -25,11 +25,11 @@
 
 | 密钥 | 变量名 | 长度 | 用途 | 存放 |
 |------|--------|------|------|------|
-| 服务器密钥 | server_secret | 默认 32B | 握手阶段对 token 签名 | 仅服务器内存（10 分钟轮换，保留最近 2 把） |
+| Token 密钥 | token_key | 默认 32B | 握手阶段对 token 签名 | 仅服务器内存（60 秒轮换，保留最近 2 把） |
 | 客户端密钥 | secret | 默认 32B | 对所有握手后消息签名/验签 | 双端内存，生命周期与 bid record 相同 |
 | 应用密钥 | enigma | 任意长度 | 握手阶段对 secret 加密 | 服务器安全目录 + 客户端本地 |
 
-- server_secret 轮换周期 `server_secret_rotate_interval`（默认 600 秒）；轮换期间保留旧密钥用于 token 校验，避免恰在握手中的客户端失败；
+- token_key 轮换周期 `token_key_rotate_interval`（默认 60 秒）；轮换期间保留旧密钥用于 token 校验，避免恰在握手中的客户端失败；token 有效期约 1~2 分钟，由密钥组轮换天然限定；
 - secret 在 record 生命周期内**永不改变**；攻击者无需重新嗅探（除非受害者换网络）；
 - enigma 由管理员预先指定、可靠渠道发放，非随机生成；客户端通过 "SYN?" 上报 enigma 键，服务器取交集任选其一，实现密钥轮换（过渡期新旧密钥同时保留）。
 
@@ -80,13 +80,13 @@ UDP 包天然完整。按 header 解析后，比较实际包长与 `header_lengt
 握手采用**无状态**令牌设计，服务器在 "ACK!" 前不保存任何记录：
 
 ```
-token = HMAC-SHA256(server_secret, "bid={bid}&secret={secret}&socket={socket}&time={token_time}")
+token = HMAC-SHA256(token_key, "bid={bid}&secret={secret}&socket={socket}")
 ```
 
-（四个键按字典序排序后拼接，见架构文档 §6.4）
+（三个键按字典序排序后拼接，见架构文档 §6.4）
 
 - "SYN?" 阶段：服务器分配/复用 bid、生成 secret、计算 token，但不落任何状态；
-- "ACK!" 阶段：服务器从包中取回 3 个参数（secret/token/token_time）+ 观察到的来源 socket，重算比对（依次尝试最近 2 把 server_secret），通过才创建记录；
+- "ACK!" 阶段：服务器从包中取回 2 个参数（secret/token）+ 观察到的来源 socket，重算比对（依次尝试最近 2 把 token_key），通过才创建记录；
 - 攻击者可以自身 socket 完成握手注册僵尸记录，但只持有自己记录的 secret，拿不到其他用户的 secret，无法冒充该 bid 发言（见 5.2）。
 
 ### 4.2 加密握手（Enigma）
@@ -305,7 +305,6 @@ bid 与 socket 绑定（socket 即身份，见架构文档）；若某 record �
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | handshake_min_payload | 512 | 握手上行包最小载荷（防放大） |
-| handshake_token_timeout | 60.0s | "ACK!" token_time 有效窗口；超时静默丢弃、不创建记录（防重放/陈旧握手包） |
 | unconfirmed_reply_buckets | 1024 | 共享配额桶数（按 hash(socket) % U 定位） |
 | reply_rate_limit | 10/s | 未确认来源的 "FAIL" 应答限频 |
 | allowlist_max_entries | 256 | 每条记录通行证列表上限（槽区长度 = 值 × 8 字节，IPv4/IPv6 槽同格式） |
@@ -314,6 +313,6 @@ bid 与 socket 绑定（socket 即身份，见架构文档）；若某 record �
 | record_active_timeout | 60.0s | 在线判定窗口；紧急自救回收时效逐轮减半的下限 |
 | record_recycle_interval | 600.0s（10 min） | 两次 purge 扫描之间的最小间隔 |
 | noop_immunity_window | 2.0s | "NOOP" 免疫窗口（防 "FIN?" 踢人；窗口内应答但不标记 offline） |
-| server_secret_rotate_interval | 600.0s | 服务器密钥轮换周期 |
+| token_key_rotate_interval | 60.0s | Token 密钥轮换周期 |
 | app_secret_file | （空） | 应用密钥文件路径，配置示例 `# app_secret_file = /etc/magpie/private/enigma.json` |
 | app_secret_reload_interval | 600.0s | 应用密钥重读周期 |

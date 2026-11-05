@@ -92,7 +92,7 @@ class Manager(Worker):
         #  periodic maintenance
         #
         self.__bids.purge(now=now)
-        self.__secrets.rotate_server_secrets(now=now)
+        self.__secrets.rotate_token_keys(now=now)
         self.__secrets.load_enigma_secrets(now=now)
         #
         #  process next task
@@ -217,15 +217,13 @@ class Manager(Worker):
         else:
             secret_b64 = keeper.encode_secret(secret=secret)
 
-        token_time = int(time.time())
+        # token: "bid={bid}&secret={secret}&socket={socket}"
         token = keeper.create_token(bid=bid, secret_b64=secret_b64,
-                                    socket_key=address.key(),
-                                    token_time=token_time)
+                                    socket_key=address.key())
 
         body = {
             'secret': secret_b64,
             'token': token,
-            'token_time': token_time,
             'time': time.time(),
             'UDP': address.key(),
         }
@@ -263,12 +261,7 @@ class Manager(Worker):
             return
         secret_b64 = info.get('secret')
         token = info.get('token')
-        token_time = info.get('token_time')
-        if not isinstance(secret_b64, str) or not isinstance(token, str) \
-                or not isinstance(token_time, int):
-            return
-        # token freshness (absolute delta: tolerate a small clock rollback)
-        if abs(time.time() - token_time) > self.__config.handshake_token_timeout:
+        if not isinstance(secret_b64, str) or not isinstance(token, str):
             return
         keeper = self.__secrets
         # encrypted mode: enigma required
@@ -282,7 +275,7 @@ class Manager(Worker):
                 return
             # token check uses the ciphertext as secret
             if not keeper.check_token(token=token, bid=bid, secret_b64=secret_b64,
-                                      socket_key=address.key(), token_time=token_time):
+                                      socket_key=address.key()):
                 return
             # decrypt secret
             try:
@@ -300,7 +293,7 @@ class Manager(Worker):
             if isinstance(packet, ReliablePacket):
                 return
             if not keeper.check_token(token=token, bid=bid, secret_b64=secret_b64,
-                                      socket_key=address.key(), token_time=token_time):
+                                      socket_key=address.key()):
                 return
             # decode secret
             try:

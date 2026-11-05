@@ -118,7 +118,7 @@ stateDiagram-v2
 - 载荷含 src-command 时再区分：
   - src-target 存在 → 对端离线，通知上层即可，无需重试；
   - sources 存在（无 src-target）→ 无法修改通行证，剔除失败子集重试或放弃；
-  - 两者皆无（仅 src-command 与 time）→ 连接未确认，直接补发 "ACK!"（幂等，token 未过期）。
+  - 两者皆无（仅 src-command 与 time）→ 连接未确认，直接补发 "ACK!"（幂等，token 未失效，有效期约 1~2 分钟）。
 
 > 无附加校验码的 "FAIL"（bid 分配失败、连接未确认——记录未创建时服务器无 secret 可计算校验码）可被攻击者伪造，只能诱导补发 "ACK!" 或重新握手，客户端处理须幂等、无副作用。
 > 已绑定后收到的服务器应答均带校验码（见安全文档 3.1），客户端验证失败即丢弃；仅握手阶段应答（"SYN!"、连接未确认 "FAIL"）无校验码、须幂等处理。
@@ -145,7 +145,7 @@ sequenceDiagram
     participant S as 服务器
 
     C->>S: "SYN?"（source=0 或预订 bid，载荷≥512B，填充，无校验码）
-    S-->>C: "SYN!"（secret, token, token_time, UDP）
+    S-->>C: "SYN!"（secret, token, UDP）
     C->>C: 保存 secret
     C->>S: "ACK!"（source=bid，原样回传 3 参数，无校验码）
     Note over C,S: 连接建立

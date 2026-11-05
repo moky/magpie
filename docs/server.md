@@ -70,7 +70,7 @@
 2. 从管理请求队列取下一个任务（空则阻塞等待）；
 3. 按 command 走子流程：
    - "SYN?"：唯一允许 source bid = 0 的场景（分配/预订/内定，见 5 节）；加密模式须先校验上报 enigmas 与本地映射表交集（缺失/交集为空则静默丢弃、不进入分配），通过后分配/复用 bid 并从交集选密钥加密 secret（见安全文档 4.2、协议文档 7.3）；
-   - "ACK!"：无状态 token 校验（`token_time` 须在 `handshake_token_timeout` 窗口内，超时静默丢弃、不创建记录）；基础模式无校验码，加密模式须带 HMAC 校验码（验证链见安全文档 4.2、协议文档 7.3）；通过后创建记录；
+   - "ACK!"：无状态 token 校验（token 不匹配即静默丢弃、不创建记录）；基础模式无校验码，加密模式须带 HMAC 校验码（验证链见安全文档 4.2、协议文档 7.3）；通过后创建记录；
    - 其余系统指令：先来源检查（socket 查表 → 无记录按连接未确认，仅 PING/ACPT/DENY 三类指令会收到 "FAIL"；不匹配按伪造丢弃）；再附加校验（HMAC，失败即丢弃）；再**离线分流**（记录 offline == true 且 command 不属于 "FIN?"/"NOOP" → 静默丢弃、不更新 last_time）；再更新 last_time，再指令集过滤（未知指令丢弃），最后按 command 执行；
 4. 周期任务：应用密钥重载（见 6.4）。
 
@@ -330,7 +330,7 @@ AView.accept(A.record);   // 槽主 A 命中 → value |= 1 写回（或 accept(
 
 ## 7. 密钥轮换
 
-- **server_secret**：管理线程每 `server_secret_rotate_interval`（600s）轮换；生成新随机密钥后它成为最新密钥，仅保留最近 2 把用于 token 校验——新 token 由最新密钥签发，校验时对保留的密钥逐个重算、任一匹配即通过（新旧次序的存储方式不绑定实现）；
+- **token_key**：管理线程主循环周期检查轮换（约每 0.05s 一次），间隔 `token_key_rotate_interval`（默认 60s）；生成新随机密钥后它成为最新密钥，仅保留最近 2 把用于 token 校验——新 token 由最新密钥签发，校验时对保留的密钥逐个重算、任一匹配即通过（新旧次序的存储方式不绑定实现）；token 有效期约 1~2 分钟，由密钥组轮换天然限定；
 - **secret**：客户端密钥，record 生命周期内不变；由握手下发，用于所有消息的 HMAC 校验。
 
 ---
@@ -364,14 +364,13 @@ AView.accept(A.record);   // 槽主 A 命中 → value |= 1 写回（或 accept(
 | max_records | 65536 | 内存记录总数上限（比 IPv4 端口空间多 1，单台 IPv4 主机打不满；新建握手将创建记录时已达上限回 "FAIL"，仅内定流程豁免；已存在记录不受影响） |
 | allowlist_max_entries | 256 | 通行证列表上限（条目数；槽区长度 = 值 × 8 字节，IPv4/IPv6 槽同格式；超限条目跳过、回显失败子集） |
 | bid_allocation_retries | 16 | bid 随机分配冲突重试次数（重试耗尽即回复 FAIL；不一定意味着服务器已满） |
-| handshake_token_timeout | 60.0 | 握手 token 超时（秒；正常握手毫秒级完成，仅防重放与陈旧握手包） |
 | handshake_min_payload | 512 | 握手上行包最小载荷（防放大；"SYN!" 应答小于请求） |
 | unconfirmed_reply_buckets | 1024 | 共享配额桶数（按 hash("ip:port") % U 定位） |
 | reply_rate_limit | 10 | 未确认来源 "FAIL" 限频（次/秒/桶） |
 | noop_immunity_window | 2.0 | "NOOP" 免疫窗口（秒；窗口内 "FIN?" 应答但不标记 offline） |
 | app_secret_file | （空） | 应用密钥文件路径（示例：`# app_secret_file = /etc/magpie/private/enigma.json`） |
 | app_secret_reload_interval | 600.0 | 应用密钥重读周期（秒） |
-| server_secret_rotate_interval | 600.0 | 服务器密钥轮换周期（秒，保留最近 2 把） |
+| token_key_rotate_interval | 60.0 | Token 密钥轮换周期（秒，保留最近 2 把） |
 | waiting_queue_size | 4096 | 等待处理队列容量（任务数） |
 | manager_queue_size | 1024 | 管理请求队列容量（任务数） |
 | forwarder_queue_size | 65536 | 每条转发线程的队列容量（任务数；最坏约 64 MiB/线程，按满载荷 1KiB 计） |
@@ -407,7 +406,6 @@ allowlist_max_entries = 256
 bid_allocation_retries = 16
 
 # security
-handshake_token_timeout = 60.0
 handshake_min_payload = 512
 unconfirmed_reply_buckets = 1024
 reply_rate_limit = 10
@@ -416,7 +414,7 @@ noop_immunity_window = 2.0
 # secrets
 app_secret_file = /etc/magpie/private/enigma.json
 app_secret_reload_interval = 600.0
-server_secret_rotate_interval = 600.0
+token_key_rotate_interval = 60.0
 
 # task queue
 waiting_queue_size = 4096

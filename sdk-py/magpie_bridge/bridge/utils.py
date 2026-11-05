@@ -74,22 +74,23 @@ def socket_identity_hash(socket_key: str) -> int:
 #   handshake token
 #
 
-def generate_token(server_secret: bytes, bid: int, secret_b64: str,
-                   socket_key: str, token_time: int) -> str:
-    """token = Base64(HMAC-SHA256(server_secret,
-       "bid={bid}&secret={secret}&socket={socket}&time={time}"))
+def generate_token(token_key: bytes,
+                   bid: int, secret_b64: str, socket_key: str) -> str:
+    """token = Base64(HMAC-SHA256(token_key,
+       "bid={bid}&secret={secret}&socket={socket}"))
        fields are merged in key alphabetical order."""
-    s = 'bid=%d&secret=%s&socket=%s&time=%d' % (bid, secret_b64,
-                                                socket_key, token_time)
-    return base64.b64encode(HmacSha256.generate(server_secret, s.encode('utf-8'))).decode('ascii')
+    text = 'bid=%d&secret=%s&socket=%s' % (bid, secret_b64, socket_key)
+    data = text.encode('utf-8')
+    tag = HmacSha256.generate(token_key, data)
+    b64 = base64.b64encode(tag)
+    return b64.decode('ascii')
 
 
-def verify_token(server_secrets: Sequence[bytes], bid: int, secret_b64: str,
-                 socket_key: str, token_time: int, token: str) -> bool:
-    """Recompute and compare against all known server secrets (up to 2)."""
-    for secret in server_secrets:
-        candidate = generate_token(secret, bid, secret_b64, socket_key,
-                                   token_time)
+def verify_token(token: str, token_keys: Sequence[bytes],
+                 bid: int, secret_b64: str, socket_key: str) -> bool:
+    """Recompute and compare against all known token keys (up to 2)."""
+    for key in token_keys:
+        candidate = generate_token(key, bid, secret_b64, socket_key)
         if hmac_module.compare_digest(candidate, token):
             return True
     return False

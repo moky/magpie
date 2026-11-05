@@ -27,17 +27,17 @@ sequenceDiagram
     Note over C,S: 第 1 次握手（source bid 可为 0 或预订值）
     C->>S: "SYN?"（载荷≥512B，无校验码）
     S->>S: 生成/复用 bid + secret，计算 token（无状态，不建记录）
-    S-->>C: "SYN!"（secret, token, token_time, UDP，无校验码）
-    Note over C,S: 第 2 次握手（服务器下发 secret/token/token_time）
+    S-->>C: "SYN!"（secret, token, UDP，无校验码）
+    Note over C,S: 第 2 次握手（服务器下发 secret/token）
 
-    Note over C,S: 第 3 次握手（客户端原样回传 3 参数）
-    C->>S: "ACK!"（source=bid，回传 secret/token/token_time，无校验码）
+    Note over C,S: 第 3 次握手（客户端原样回传 2 参数）
+    C->>S: "ACK!"（source=bid，回传 secret/token，无校验码）
     S->>S: token 校验通过 → 创建 bid record（bid/socket 双索引）
     Note over C,S: 连接建立，可开始转发
 ```
 
 - "SYN?" 的 source bid 可以是 0（全新分配）或预设值（预订/内定，见架构文档）；
-- "SYN!" 中 token 基于服务器密钥 + bid + secret + socket + time 计算，服务器无状态；
+- "SYN!" 中 token 基于 Token 密钥 + bid + secret + socket 计算，服务器无状态；
 - "ACK!" 验证通过才创建记录（创建即确认）；记录创建后 secret 不可变。
 
 ### 2.2 加密握手（Enigma）
@@ -52,7 +52,7 @@ sequenceDiagram
     Note over C,S: 加密模式（可选，密钥文件非空）
     C->>S: "SYN?"（enigmas: [键列表]，载荷≥512B，无校验码）
     S->>S: 取键交集任选 enigma → HKDF 派生 AES 密钥 → 加密 secret
-    S-->>C: "SYN!"（enigma 参数 + secret=密文 + token + token_time）
+    S-->>C: "SYN!"（enigma 参数 + secret=密文 + token）
     C->>C: 用本地 enigma 解密 → 得到 secret 明文
     C->>S: "ACK!"（回传加密参数 + HMAC(secret明文) 校验码）
     S->>S: ①查 enigma 键 ②验 token（用载荷密文）③解密 secret ④验校验码

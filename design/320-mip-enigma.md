@@ -10,23 +10,23 @@
 
 | 中文名称 | 规范用词（正文/代码） | 别名（仅本表与配置项使用） | 说明 |
 |----------|----------------------|----------------------------|------|
-| 服务器密钥 | `server_secret` | — | 服务器随机生成，仅用于握手 token 签名/校验 |
+| Token 密钥 | `token_key` | — | 服务器随机生成，仅用于握手 token 签名/校验 |
 | 客户端密钥 | `secret` | `client_secret`（仅下表变量名列使用） | 服务器随机生成，握手后所有消息包签名/验签 |
 | 应用密钥 | `enigma` | `app_secret`（仅配置项 `app_secret_file` 等概念名使用） | 管理员预先指定，握手阶段用于加密 `secret` |
 
-> 正文出现 `secret` 时指客户端密钥；出现 `enigma` 时指应用密钥；`server_secret` 专指服务器密钥。
+> 正文出现 `secret` 时指客户端密钥；出现 `enigma` 时指应用密钥；`token_key` 专指 Token 密钥。
 > 配置项 `app_secret_file` / `app_secret_reload_interval` 中的 `app_secret` 是应用密钥的配置侧概念，与线上传输的 `enigma` 为同一把密钥。
 
-与前面设计的服务器密钥 `server_secret`、客户端密钥 `secret` 都不同，这个应用密钥 `enigma` 不是随机生成的，
+与前面设计的 Token 密钥 `token_key`、客户端密钥 `secret` 都不同，这个应用密钥 `enigma` 不是随机生成的，
 而是预先指定，并存放在服务器的安全目录中，然后通过可靠渠道发放给应用：
 
-- 服务器密钥（server_secret，默认 32 字节）由服务器随机数生成，仅保存在服务器内存中，在 `server_secret_rotate_interval`（默认 600 秒 = 10 分钟）内有效；
+- Token 密钥（token_key，默认 32 字节）由服务器随机数生成，仅保存在服务器内存中，token 有效期约 1~2 分钟，由密钥组轮换（`token_key_rotate_interval`，默认 60 秒，保留最近 2 把）天然限定；
 - 客户端密钥（secret；下表别名 client_secret，默认 32 字节）由服务器随机数生成，并在握手阶段发给客户端，双端均只保存在内存中，有效期与 bid record 生命周期相等；
 - 应用密钥（enigma；配置项/字段概念 app_secret，任意长度），由系统管理员设定，并通过可靠渠道分发至服务器与客户端。
 
 |               | 变量名  | 长度        | 用途                     |
 |---------------|--------|------------|--------------------------|
-| server_secret | -      | 默认 32 字节 | 握手阶段对 token 进行签名  |
+| token_key    | -      | 默认 32 字节 | 握手阶段对 token 进行签名  |
 | client_secret | secret | 默认 32 字节 | 对所有握手后的消息进行签名  |
 | app_secret    | enigma | 任意长度     | 握手阶段对 secret 进行加密 |
 
@@ -110,7 +110,6 @@
     },
     "secret": "{Base64 编码的加密后的 secret，即 ciphertext}",
     "token":  "{Base64 编码的 token}",
-    "token_time": {服务器生成此 token 的时间戳，整数秒},
     
     "time": 1234567890.125,
     
@@ -128,7 +127,7 @@
 
 - 读取载荷中的 "enigma" 字段，取出其中的 "key" 字符串（任意长度），并从 enigma 映射表中查找解密密钥，如果不存在则说明当前应用中的 enigma.secrets 映射表没有与服务器支持的匹配，报错退出；
 - 从字段 "secret" 读取客户端密钥的密文，然后用 "enigma" 中的参数对其进行解密，得到真实的 secret；
-- 保存 secret 进内存以供后续的消息包签名、验签使用，然后将收到的 enigma/secret/token/token_time 等原样放进第三次握手包 "ACK!" 发回给服务器。
+- 保存 secret 进内存以供后续的消息包签名、验签使用，然后将收到的 enigma/secret/token 等原样放进第三次握手包 "ACK!" 发回给服务器。
 
 新版 "ACK!" 载荷格式：
 
@@ -147,7 +146,6 @@
     },
     "secret": "{Base64 编码的加密后的 secret，即 ciphertext}",
     "token":  "{Base64 编码的 token}",
-    "token_time": {服务器生成此 token 的时间戳，整数秒},
     
     "time": 1234567890.127,
     
@@ -165,7 +163,7 @@
 服务器收到 "ACK!" 包之后，如果当前为**加密模式**，则
 
 - 先检查载荷中的 "enigma" 字段，字段不存在或者其中的 "key" 与本地应用密钥映射表无对应值则静默丢弃；
-- 然后按**原握手流程**对 token 进行校验（用服务器密钥组重算比对，见架构文档），其中参与计算的 secret 取**载荷中的 "secret" 字段值**（加密模式下即密文，无需先解密）；校验失败则静默丢弃；
+- 然后按**原握手流程**对 token 进行校验（用 Token 密钥组重算比对，见架构文档），其中参与计算的 secret 取**载荷中的 "secret" 字段值**（加密模式下即密文，无需先解密）；校验失败则静默丢弃；
 - 再用 "enigma" 中的信息对 "secret" 进行解密，如若解密失败（tag 校验不通过）视为无效握手，静默丢弃；
 - 通过前面步骤得到客户端密钥 secret 明文后，再用来对 attachment 进行校验，校验失败则静默丢弃；
 - 全部通过后创建/复用 bid record，记录中的 secret 使用解密得到的值。

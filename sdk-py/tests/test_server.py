@@ -44,7 +44,7 @@ def run():
 
     ack_payload = json.dumps({
         'time': time.time(), 'secret': info['secret'],
-        'token': info['token'], 'token_time': info['token_time'],
+        'token': info['token'],
         'pad': 'x' * 480,   # ACK! must be padded to >= handshake_min_payload
     }).encode()
     # plain (non-encrypted) mode: ACK! must NOT carry an attachment

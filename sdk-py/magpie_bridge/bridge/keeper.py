@@ -40,11 +40,11 @@ from .enigma import Enigma
 
 
 class SecretKeeper:
-    """Owns the server secrets and the enigma table.
+    """Owns the token keys and the enigma table.
 
     - client secrets: freshly generated per handshake (32-byte random);
-    - server secrets: rotated every server_secret_rotate_interval, the
-      latest two are kept so tokens created before a rotation stay valid;
+    - token keys: rotated every token_key_rotate_interval, the latest two
+      are kept so tokens created before a rotation stay valid;
     - enigma table: reloaded from the app-secret file every
       app_secret_reload_interval (docs/server.md 6).
     """
@@ -52,9 +52,9 @@ class SecretKeeper:
     def __init__(self, config: ServerConfig):
         super().__init__()
         self.__config = config
-        # server secret
-        self.__server_secrets: List[bytes] = [os.urandom(32)]
-        self.__last_secret_rotate = 0.0
+        # token keys
+        self.__token_keys: List[bytes] = [os.urandom(32)]
+        self.__last_token_key_rotate = 0.0
         # enigma
         self.__lock = threading.Lock()  # guards the enigma table
         self.__enigma_secrets: Dict[str, bytes] = {}
@@ -204,38 +204,31 @@ class SecretKeeper:
         )
 
     #
-    #   Server Secrets
+    #   Token Keys
     #
 
-    def rotate_server_secrets(self, now: float):
-        """Rotate the server signing secrets, keeping the latest two.
+    def rotate_token_keys(self, now: float):
+        """Rotate the token signing keys, keeping the latest two.
 
         Args:
             now: current epoch seconds.
         """
-        if now - self.__last_secret_rotate < self.__config.server_secret_rotate_interval:
+        if now - self.__last_token_key_rotate < self.__config.token_key_rotate_interval:
             return
         else:
-            self.__last_secret_rotate = now
-        # shift new secret
-        self.__server_secrets.insert(0, os.urandom(32))
-        del self.__server_secrets[2:]
+            self.__last_token_key_rotate = now
+        # shift new key
+        self.__token_keys.insert(0, os.urandom(32))
+        del self.__token_keys[2:]
 
-    def create_token(self, bid: int, secret_b64: str,
-                     socket_key: str, token_time: int) -> str:
-        """ Create the handshake token with the newest server secret. """
-        server_secret = self.__server_secrets[0]
-        return generate_token(server_secret=server_secret,
-                              bid=bid, secret_b64=secret_b64,
-                              socket_key=socket_key,
-                              token_time=token_time)
+    def create_token(self, bid: int, secret_b64: str, socket_key: str) -> str:
+        """ Create the handshake token with the newest token key. """
+        token_key = self.__token_keys[0]
+        return generate_token(token_key=token_key,
+                              bid=bid, secret_b64=secret_b64, socket_key=socket_key)
 
-    def check_token(self, token: str, bid: int, secret_b64: str,
-                    socket_key: str, token_time: int) -> bool:
-        """ Verify the token against any of the active server secrets. """
-        server_secrets = self.__server_secrets
-        return verify_token(server_secrets=server_secrets,
-                            bid=bid, secret_b64=secret_b64,
-                            socket_key=socket_key,
-                            token_time=token_time,
-                            token=token)
+    def check_token(self, token: str, bid: int, secret_b64: str, socket_key: str) -> bool:
+        """ Verify the token against any of the active token keys. """
+        token_keys = self.__token_keys
+        return verify_token(token=token, token_keys=token_keys,
+                            bid=bid, secret_b64=secret_b64, socket_key=socket_key)

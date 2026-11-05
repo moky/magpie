@@ -184,12 +184,6 @@ bid_allocation_retries = 16
 #
 #   Security Limits
 #
-# handshake token timeout: an "ACK!" whose token_time is older than
-# this is silently dropped (no reply, no record) (seconds, default:
-# 60.0; a normal handshake completes in milliseconds, this only
-# guards against replay and stale handshake packets)
-handshake_token_timeout = 60.0
-
 # handshake flood guard: minimum payload length of the handshake
 # packets "SYN?" and "ACK!" (bytes, default: 512; keeps the "SYN!"
 # reply smaller than the request to prevent amplification)
@@ -234,11 +228,12 @@ app_secret_file =
 # map is kept (seconds, default: 600.0 = 10 minutes)
 app_secret_reload_interval = 600.0
 
-# server secret rotation: a new server secret is generated and becomes
-# the newest when it has been longer than this since the last rotation;
-# at most the latest 2 secrets are kept for token verification
-# (seconds, default: 600.0 = 10 minutes)
-server_secret_rotate_interval = 600.0
+# token key rotation: a new token key is generated and becomes the
+# newest when it has been longer than this since the last rotation;
+# at most the latest 2 keys are kept for token verification
+# (seconds, default: 60.0 = 1 minute; the token lifetime is bounded
+# to about 1~2 minutes by this rotation)
+token_key_rotate_interval = 60.0
 
 ################################################################
 #

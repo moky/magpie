@@ -187,7 +187,7 @@ class BridgePacketFactory {
     /// 第二次握手：target 为服务器分配的 bid
     BridgePacket synAck(Uint8List response, {required int target}) => ...;
 
-    /// 第三次握手：原样回传第二次握手包中的 secret/token/token_time
+    /// 第三次握手：原样回传第二次握手包中的 secret/token
     BridgePacket ack(Uint8List response, {required int source}) => ...;
 
     BridgePacket fail(Uint8List response, {required int target, int sn = 0, int index = 0, int count = 1}) => ...;

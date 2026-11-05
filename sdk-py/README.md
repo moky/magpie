@@ -84,7 +84,6 @@ max_records = 65536
 allowlist_max_entries = 256
 bid_allocation_retries = 16
 # security
-handshake_token_timeout = 60.0
 handshake_min_payload = 512
 unconfirmed_reply_buckets = 1024
 reply_rate_limit = 10
@@ -92,7 +91,7 @@ noop_immunity_window = 2.0
 # secrets
 app_secret_file = /etc/magpie/private/enigma.json
 app_secret_reload_interval = 600.0
-server_secret_rotate_interval = 600.0
+token_key_rotate_interval = 60.0
 # task queue
 waiting_queue_size = 4096
 manager_queue_size = 1024
@@ -118,22 +117,23 @@ bridge = BridgePacketFactory()
 direct = DirectPacketFactory()
 
 # handshake with the server
-syn = bridge.syn(request=payload)                  # SYN? (source=0)
+syn = bridge.syn(request=payload)                 # SYN? (source=0)
 syn_ack = bridge.syn_ack(response=payload, target=bid)  # SYN! from the server
 ack = bridge.ack(response=payload, source=bid)    # ACK! to the server
 
 # normal data (relayed by the server; C=0 saves 4 bytes)
-data = bridge.data(payload, target=target, source=source,
+data = bridge.data(payload=payload,
+                   target=target, source=source,
                    sn=sn, index=0, count=1)
-signed = data.sign(secret)                        # ReliablePacket: 32-byte
+signed = data.sign(secret=secret)                 # ReliablePacket: 32-byte
                                                   # attachment
-copy = bridge.copy(data)                          # COPY acknowledgement
+copy = bridge.copy(packet=data)                   # COPY acknowledgement
 
 # direct client-to-client packets (no bids, no attachment)
-d = direct.data(payload, sn=sn, index=0, count=1)
+d = direct.data(payload=payload, sn=sn, index=0, count=1)
 
 # parse a received packet (B-bit filtered per factory)
-magpie = bridge.parse(data_bytes)
+magpie = bridge.parse(data=data_bytes)
 ```
 
 ## Tests
