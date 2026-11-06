@@ -116,7 +116,7 @@ bool _constantTimeByteEq(Uint8List a, Uint8List b) {
 
 ### 3. 实现 BridgePacketFactory 的 parse() 接口
 
-服务器在**预处理线程**中调用解析接口，该线程不查询分配表、拿不到客户端密钥，因此解析层只做包级校验与类型判定，**不做**附加校验码验证（验证由管理线程/转发线程取得 `record.secret` 后调用 `ReliablePacket.verify()` 完成，见服务器设计）。
+服务器在**预处理线程**中调用解析接口，该线程不查询分配表、拿不到消息密钥，因此解析层只做包级校验与类型判定，**不做**附加校验码验证（验证由管理线程/转发线程取得 `record.secret` 后调用 `ReliablePacket.verify()` 完成，见服务器设计）。
 
 ```dart
 class BridgePacketFactory {

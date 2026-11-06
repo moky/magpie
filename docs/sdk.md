@@ -353,7 +353,7 @@ bool _constantTimeByteEq(Uint8List a, Uint8List b) {
 
 ### 6.2 BridgePacketFactory.parse（服务器场景）
 
-服务器在**预处理线程**中调用本接口，该线程不查询分配表、拿不到客户端密钥，因此解析层只做包级校验与类型判定、**不验证**附加校验码——验证由管理/转发线程取得 `record.secret` 后调用 `ReliablePacket.verify()` 完成（见服务器文档 3 节）：
+服务器在**预处理线程**中调用本接口，该线程不查询分配表、拿不到消息密钥，因此解析层只做包级校验与类型判定、**不验证**附加校验码——验证由管理/转发线程取得 `record.secret` 后调用 `ReliablePacket.verify()` 完成（见服务器文档 3 节）：
 
 ```dart
 class BridgePacketFactory {

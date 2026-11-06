@@ -9,7 +9,7 @@ Record 属性：
 - bid       (**门牌号**)
 - key       (**客户端索引** "{ip}:{port}")
 - socket    (**客户端信息** ip, port；类型 SocketAddress，见附 2)
-- secret    (**客户端密钥**)
+- secret    (**消息密钥**)
 - last_time (最后活跃时间)
 - last_noop_time (最近一次 "NOOP" 时间，免疫窗口判定基准，见安全提案)
 - offline   (主动下线标志)
