@@ -47,12 +47,20 @@ class Worker(ABC):
     """ Threads """
 
     def __init__(self, sock: Optional[socket.socket] = None,
+                 blocking: bool = True,
                  counters: Optional[SharedCounters] = None):
         super().__init__()
         self.__running = False
         self.__sock = sock
         self.__counters = counters
         self.__packet_factory = BridgePacketFactory()
+        if blocking:
+            self.__flags = 0
+        else:
+            # Per-call non-blocking flag: affects only this sendto(), unlike
+            # setblocking(False) which would also break the blocking recvfrom() loop.
+            # Platforms without MSG_DONTWAIT (e.g. Windows) degrade to 0 (blocking).
+            self.__flags = getattr(socket, 'MSG_DONTWAIT', 0)
 
     @property
     def packet_factory(self) -> BridgePacketFactory:
@@ -114,7 +122,7 @@ class Worker(ABC):
             data: the wire bytes.
         """
         try:
-            self.__sock.sendto(data, (address.ip, address.port))
+            self.__sock.sendto(data, self.__flags, (address.ip, address.port))
         except OSError:
             pass
 

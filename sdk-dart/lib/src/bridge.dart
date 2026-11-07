@@ -76,12 +76,11 @@ class BridgePacket extends BasePacket {
     required int index,
     required int count,
     required int command,
-    required Uint8List? payload,
+    required Uint8List payload,
   }) {
     final cmd = calcCmd(command);
     final dsn = calcDsn(sn);
     final ext = calcExt(count);
-    payload ??= Uint8List(0);
     return BridgePacket(MessagePacket(null,
       ack: ack,
       bid: 1,

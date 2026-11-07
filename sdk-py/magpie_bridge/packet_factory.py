@@ -105,6 +105,7 @@ class MessagePacketFactory:
             # cut the tail here
             data = data[:size]
         elif tail != 0:
+            # tail is neither 0 nor 32: bad packet.
             return None
 
         # 3. Read header fields and validate them.

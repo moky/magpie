@@ -218,7 +218,7 @@ class BridgePacketFactory(MessagePacketFactory):
     #   Reply factories (fields copied from the request).
     #
 
-    def pong(self, packet: Magpie, response: Optional[bytes] = None) -> BridgePacket:
+    def pong(self, response: bytes, packet: Magpie) -> BridgePacket:
         """ Reply (PONG, A=1): answer a client's PING.
 
             Args:
@@ -233,7 +233,7 @@ class BridgePacketFactory(MessagePacketFactory):
                                    sn=packet.sn, index=packet.index, count=packet.count,
                                    command=Command.PONG, payload=response)
 
-    def fin_ack(self, packet: Magpie, response: Optional[bytes] = None) -> BridgePacket:
+    def fin_ack(self, response: bytes, packet: Magpie) -> BridgePacket:
         """ Reply (FIN!, A=1): confirm a client's FIN shutdown request.
 
             Args:
@@ -270,7 +270,7 @@ class BridgePacketFactory(MessagePacketFactory):
                                    sn=sn, index=index, count=count,
                                    command=Command.EMPTY, payload=payload)
 
-    def copy(self, packet: Magpie, response: Optional[bytes] = None) -> BridgePacket:
+    def copy(self, response: bytes, packet: Magpie) -> BridgePacket:
         """ Reply: acknowledge a received DATA packet with COPY (A=1).
 
             Args:
@@ -310,12 +310,16 @@ class BridgePacketFactory(MessagePacketFactory):
         """
         packet = super().parse(data=data)
         if packet is None or packet.bid != 1:
+            # direct packet not for this factory.
             return None
         size = packet.header_length + packet.payload_length
         tail = len(data) - size
         if tail == 0:
+            # bridge packet without attachment
             return BridgePacket(packet=packet)
         if tail != ATTACHMENT_LENGTH:
+            # tail is neither 0 nor 32: bad packet.
             return None
+        # reliable packet with verify code
         attachment = data[size:size + ATTACHMENT_LENGTH]
         return ReliablePacket(packet=packet, attachment=attachment)

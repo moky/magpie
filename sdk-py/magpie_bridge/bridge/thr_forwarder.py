@@ -65,7 +65,7 @@ class Forwarder(Worker):
             sock: the UDP socket used for replies.
             counters: the shared rate limiter for unconfirmed FAIL replies.
         """
-        super().__init__(sock=sock, counters=counters)
+        super().__init__(sock=sock, counters=counters, blocking=False)
         self.__index = index
         self.__forward_queue = forward_queue
         self.__config = config

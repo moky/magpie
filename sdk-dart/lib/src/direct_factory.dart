@@ -32,6 +32,7 @@ import 'dart:typed_data';
 
 import 'protocol/command.dart';
 import 'protocol/magpie.dart';
+import 'protocol/protocol.dart';
 
 import 'reliable.dart';
 import 'packet_factory.dart';
@@ -55,7 +56,7 @@ class DirectPacketFactory extends MessagePacketFactory {
   /// [request] carries the handshake body.
   ///
   /// Returns a SYN? packet to the peer.
-  DirectPacket syn(Uint8List? request) => DirectPacket.create(
+  DirectPacket syn(Uint8List request) => DirectPacket.create(
     ack: 0,
     sn: 0,
     index: 0,
@@ -69,7 +70,7 @@ class DirectPacketFactory extends MessagePacketFactory {
   /// [response] echoes the handshake body.
   ///
   /// Returns the SYN! reply to the peer's SYN?.
-  DirectPacket synAck(Uint8List? response) => DirectPacket.create(
+  DirectPacket synAck(Uint8List response) => DirectPacket.create(
     ack: 1,
     sn: 0,
     index: 0,
@@ -83,7 +84,7 @@ class DirectPacketFactory extends MessagePacketFactory {
   /// [response] echoes back the token material from the SYN!.
   ///
   /// Returns the closing handshake packet.
-  DirectPacket ack(Uint8List? response) => DirectPacket.create(
+  DirectPacket ack(Uint8List response) => DirectPacket.create(
     ack: 1,
     sn: 0,
     index: 0,
@@ -98,10 +99,10 @@ class DirectPacketFactory extends MessagePacketFactory {
 
   /// Heartbeat (PING): keep-alive between peers.
   ///
-  /// [request] is optional application data.
+  /// [request] is the application data.
   ///
   /// Returns a PING packet to the peer.
-  DirectPacket ping(Uint8List? request) => DirectPacket.create(
+  DirectPacket ping(Uint8List request) => DirectPacket.create(
     ack: 0,
     sn: 0,
     index: 0,
@@ -112,10 +113,10 @@ class DirectPacketFactory extends MessagePacketFactory {
 
   /// Shutdown (FIN?): close the peer-to-peer session.
   ///
-  /// [request] is optional farewell data.
+  /// [request] is the farewell data.
   ///
   /// Returns a FIN? packet to the peer.
-  DirectPacket fin(Uint8List? request) => DirectPacket.create(
+  DirectPacket fin(Uint8List request) => DirectPacket.create(
     ack: 0,
     sn: 0,
     index: 0,
@@ -129,7 +130,7 @@ class DirectPacketFactory extends MessagePacketFactory {
   /// [request] is ignored by the protocol.
   ///
   /// Returns a NOOP packet to the peer.
-  DirectPacket noop(Uint8List? request) => DirectPacket.create(
+  DirectPacket noop(Uint8List request) => DirectPacket.create(
     ack: 0,
     sn: 0,
     index: 0,
@@ -145,13 +146,11 @@ class DirectPacketFactory extends MessagePacketFactory {
   /// Reply (PONG, A=1): answer a peer's [PING].
   ///
   /// [packet] is the PING being answered.
-  /// [response] is optional application data.
+  /// [response] is the application data.
   ///
   /// Returns a PONG packet carrying the same [sn]/[index]/[count] as the
   /// request.
-  DirectPacket pong(Magpie packet, [
-    Uint8List? response
-  ]) => DirectPacket.create(
+  DirectPacket pong(Uint8List response, Magpie packet) => DirectPacket.create(
     ack: 1,
     sn: packet.sn,
     index: packet.index,
@@ -163,13 +162,11 @@ class DirectPacketFactory extends MessagePacketFactory {
   /// Reply (FIN!, A=1): confirm a peer's [FIN] shutdown request.
   ///
   /// [packet] is the FIN? being answered.
-  /// [response] is optional application data.
+  /// [response] is the application data.
   ///
   /// Returns a FIN! packet carrying the same [sn]/[index]/[count] as the
   /// request.
-  DirectPacket finAck(Magpie packet, [
-    Uint8List? response
-  ]) => DirectPacket.create(
+  DirectPacket finAck(Uint8List response, Magpie packet) => DirectPacket.create(
     ack: 1,
     sn: packet.sn,
     index: packet.index,
@@ -209,12 +206,10 @@ class DirectPacketFactory extends MessagePacketFactory {
   ///
   /// [packet] is the data packet being acknowledged: its [sn], [index] and
   /// [count] are copied so the sender can match the acknowledgement.
-  /// [response] is optional app-defined acknowledgement content.
+  /// [response] is the app-defined acknowledgement content.
   ///
   /// Returns a COPY reply to the sender.
-  DirectPacket copy(Magpie packet, [
-    Uint8List? response
-  ]) => DirectPacket.create(
+  DirectPacket copy(Uint8List response, Magpie packet) => DirectPacket.create(
     ack: 1,
     sn: packet.sn,
     index: packet.index,
@@ -236,23 +231,18 @@ class DirectPacketFactory extends MessagePacketFactory {
   @override
   Packet? parse(Uint8List buffer) {
     final packet = super.parse(buffer);
-    if (packet == null) {
-      // bridge packet: not for this factory.
-      assert(false, 'packet error: ${buffer.length} byte(s).');
-      return null;
-    } else if (packet.bid != 0) {
-      assert(false, 'direct packet error: $packet');
+    if (packet == null || packet.bid != 0) {
+      // bridge packet not for this factory.
       return null;
     }
     final hLen = packet.headerLength;
     final pLen = packet.payloadLength;
     final tail = buffer.length - (hLen + pLen);
     if (tail == 0) {
-      // packet without attachment
+      // direct packet without attachment
       return DirectPacket(packet);
-    } else if (tail != 32) {
+    } else if (tail != ATTACHMENT_LENGTH) {
       // tail is neither 0 nor 32: bad packet.
-      assert(false, 'packet tail error: $tail byte(s)');
       return null;
     }
     // reliable packet with verify code

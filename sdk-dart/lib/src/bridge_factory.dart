@@ -32,6 +32,7 @@ import 'dart:typed_data';
 
 import 'protocol/command.dart';
 import 'protocol/magpie.dart';
+import 'protocol/protocol.dart';
 
 import 'packet.dart';
 import 'reliable.dart';
@@ -90,7 +91,7 @@ class BridgePacketFactory extends MessagePacketFactory {
 
   /// 3rd handshake (ACK!, A=1): client confirms the established session.
   ///
-  /// [response] echoes back secret/token/token_time from the SYN!.
+  /// [response] echoes back secret/token from the SYN!.
   ///
   /// Returns the final handshake packet from the client.
   BridgePacket ack(Uint8List response, {
@@ -208,7 +209,7 @@ class BridgePacketFactory extends MessagePacketFactory {
 
   /// Heartbeat (PING): client keep-alive while the pipe is idle.
   ///
-  /// [request] is optional application data.
+  /// [request] is the application data.
   /// [source] is the client's bid.
   ///
   /// Returns a PING packet to the server.
@@ -227,7 +228,7 @@ class BridgePacketFactory extends MessagePacketFactory {
 
   /// Shutdown (FIN?): client asks to close the bridge connection.
   ///
-  /// [request] is optional farewell data.
+  /// [request] is the farewell data.
   /// [source] is the client's bid.
   ///
   /// Returns a FIN? packet to the server.
@@ -270,13 +271,11 @@ class BridgePacketFactory extends MessagePacketFactory {
   /// Reply (PONG, A=1): answer a client's [PING].
   ///
   /// [packet] is the PING being answered.
-  /// [response] is optional application data.
+  /// [response] is the application data.
   ///
   /// Returns a PONG packet with target/source swapped (server -> the ping
   /// source).
-  BridgePacket pong(Magpie packet, [
-    Uint8List? response
-  ]) => BridgePacket.create(
+  BridgePacket pong(Uint8List response, Magpie packet) => BridgePacket.create(
     ack: 1,
     target: packet.source,
     source: packet.target,  // 0
@@ -290,12 +289,10 @@ class BridgePacketFactory extends MessagePacketFactory {
   /// Reply (FIN!, A=1): confirm a client's [FIN] shutdown request.
   ///
   /// [packet] is the FIN? being answered.
-  /// [response] is optional application data.
+  /// [response] is the application data.
   ///
   /// Returns a FIN! packet with target/source swapped.
-  BridgePacket finAck(Magpie packet, [
-    Uint8List? response
-  ]) => BridgePacket.create(
+  BridgePacket finAck(Uint8List response, Magpie packet) => BridgePacket.create(
     ack: 1,
     target: packet.source,
     source: packet.target,  // 0
@@ -344,12 +341,10 @@ class BridgePacketFactory extends MessagePacketFactory {
   /// [packet] is the data packet being acknowledged: its [sn], [index] and
   /// [count] are copied so the sender can match the acknowledgement, and
   /// [target]/[source] are swapped.
-  /// [response] is optional app-defined acknowledgement content.
+  /// [response] is the app-defined acknowledgement content.
   ///
   /// Returns a COPY reply addressed to [packet.source].
-  BridgePacket copy(Magpie packet, [
-    Uint8List? response
-  ]) => BridgePacket.create(
+  BridgePacket copy(Uint8List response, Magpie packet) => BridgePacket.create(
     ack: 1,
     target: packet.source,
     source: packet.target,
@@ -376,23 +371,18 @@ class BridgePacketFactory extends MessagePacketFactory {
   @override
   Packet? parse(Uint8List buffer) {
     final packet = super.parse(buffer);
-    if (packet == null) {
-      // direct packet: not for this factory.
-      assert(false, 'packet error: ${buffer.length} byte(s).');
-      return null;
-    } else if (packet.bid != 1) {
-      assert(false, 'bridge packet error: $packet');
+    if (packet == null || packet.bid != 1) {
+      // direct packet not for this factory.
       return null;
     }
     final hLen = packet.headerLength;
     final pLen = packet.payloadLength;
     final tail = buffer.length - (hLen + pLen);
     if (tail == 0) {
-      // packet without attachment
+      // bridge packet without attachment
       return BridgePacket(packet);
-    } else if (tail != 32) {
+    } else if (tail != ATTACHMENT_LENGTH) {
       // tail is neither 0 nor 32: bad packet.
-      assert(false, 'packet tail error: $tail byte(s)');
       return null;
     }
     // reliable packet with verify code

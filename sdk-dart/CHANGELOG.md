@@ -1,3 +1,7 @@
+## 0.3.0
+
+- Required payload.
+
 ## 0.2.0
 
 - Message Packets.

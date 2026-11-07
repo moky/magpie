@@ -64,7 +64,7 @@ class Manager(Worker):
             sock: the UDP socket used for replies.
             counters: the shared rate limiter for unconfirmed FAIL replies.
         """
-        super().__init__(sock=sock, counters=counters)
+        super().__init__(sock=sock, counters=counters, blocking=True)
         self.__manager_queue = manager_queue
         self.__config = config
         self.__bids = bids
@@ -199,7 +199,7 @@ class Manager(Worker):
             if bid is None:
                 self._reply_fail(address=address, target=0)
                 return
-            secret = self.__secrets.new_secret()
+            secret = self.__secrets.new_message_key()
 
         keeper = self.__secrets
         # pick enigma / encrypt
@@ -214,7 +214,7 @@ class Manager(Worker):
             enigma_bundle = bundle
             secret_b64 = b64
         else:
-            secret_b64 = keeper.encode_secret(secret=secret)
+            secret_b64 = keeper.encode_message_key(secret=secret)
 
         # token: "bid={bid}&secret={secret}&socket={socket}"
         token = keeper.create_token(bid=bid, secret_b64=secret_b64,
@@ -296,7 +296,7 @@ class Manager(Worker):
                 return
             # decode secret
             try:
-                secret = keeper.decode_secret(secret_b64)
+                secret = keeper.decode_message_key(secret_b64)
             except Exception as error:
                 log.warning('failed to decode secret: %s, remote: %s, error: %s',
                             secret_b64, address, error)
@@ -344,7 +344,7 @@ class Manager(Worker):
         info = parse_json(packet.payload) or {}
         info['time'] = time.time()
         response = utf8_encode(json_encode(info))
-        pong = self.packet_factory.pong(packet=packet, response=response)
+        pong = self.packet_factory.pong(response, packet=packet)
         pong = pong.sign(secret=record.secret)
         self.send(address=address, data=pong.pack())
 
@@ -361,7 +361,7 @@ class Manager(Worker):
             record.set_offline()
             log.warning('offline record: bid=%d, socket=%s', record.bid, address)
         response = utf8_encode(json_encode({'time': now}))
-        fin_ack = self.packet_factory.fin_ack(packet=packet, response=response)
+        fin_ack = self.packet_factory.fin_ack(response, packet=packet)
         fin_ack = fin_ack.sign(secret=record.secret)
         self.send(address=address, data=fin_ack.pack())
 

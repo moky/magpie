@@ -39,7 +39,7 @@ from typing import List, Optional
 from magpie_bridge.bridge.server import ServerConfig, Server
 
 DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
-LOG_FORMAT = '[{asctime}] {levelname:^7} | {name} > {message}'
+LOG_FORMAT = '[{asctime}] {message}'
 
 # keep the most recent 30 days of log files
 LOG_BACKUP_DAYS = 30

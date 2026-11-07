@@ -25,8 +25,8 @@ class TestPackets(unittest.TestCase):
         self.secret = b'0' * 32
 
     def test_handshake_roundtrip(self):
-        syn = self.factory.syn(request=b'{"time":1.0}', source=0)
-        p = self.factory.parse(syn.pack())
+        syn = self.factory.syn(b'{"time":1.0}', source=0)
+        p = self.factory.parse(data=syn.pack())
         self.assertIsNotNone(p)
         self.assertEqual(p.command, Command.SYN)
         self.assertEqual(p.source, 0)
@@ -34,7 +34,7 @@ class TestPackets(unittest.TestCase):
 
     def test_data_c0(self):
         data = self.factory.data(b'hi', target=100, source=200, sn=7)
-        p = self.factory.parse(data.pack())
+        p = self.factory.parse(data=data.pack())
         self.assertEqual(p.command, 0)
         self.assertEqual(p.cmd, 0)
         self.assertEqual(p.sn, 7)
@@ -43,19 +43,18 @@ class TestPackets(unittest.TestCase):
 
     def test_sign_verify(self):
         data = self.factory.data(b'hi', target=100, source=200, sn=7)
-        signed = data.sign(self.secret)
-        p = self.factory.parse(signed.pack())
+        signed = data.sign(secret=self.secret)
+        p = self.factory.parse(data=signed.pack())
         self.assertIsInstance(p, ReliablePacket)
         self.assertTrue(p.verify(self.secret))
         self.assertFalse(p.verify(b'1' * 32))
 
     def test_response_factories(self):
-        ping = self.factory.ping(request=b'{}', source=200)
-        pong = self.factory.pong(ping, response=b'{}')
+        ping = self.factory.ping(b'{}', source=200)
+        pong = self.factory.pong(b'{}', packet=ping)
         self.assertEqual(pong.target, 200)
         self.assertEqual(pong.command, Command.PONG)
-        cp = self.factory.copy(
-            self.factory.data(b'', target=1, source=2, sn=9))
+        cp = self.factory.copy(b'', packet=self.factory.data(b'', target=1, source=2, sn=9))
         self.assertEqual(cp.target, 2)
         self.assertEqual(cp.sn, 9)
 
@@ -78,27 +77,27 @@ class TestPackets(unittest.TestCase):
         # server catches it and drops the datagram (see bridge/thr_pre.py).
         wire = bytearray(self.factory.data(b'x' * 1024, target=1, source=2, sn=1).pack())
         wire += b'\x00' * 76                 # total = 8 + 1100 <= MSS
-        wire[6:8] = (1100).to_bytes(2, 'big')
+        wire[6:8] = int(1100).to_bytes(2, 'big')
         with self.assertRaises(AssertionError):
-            self.factory.parse(bytes(wire))
+            self.factory.parse(data=bytes(wire))
 
     def test_direct(self):
         d = self.direct_factory.data(b'hi', sn=3)
-        p = self.direct_factory.parse(d.pack())
+        p = self.direct_factory.parse(data=d.pack())
         self.assertEqual(p.bid, 0)
         # direct packets must not be accepted by the bridge factory
-        self.assertIsNone(self.factory.parse(d.pack()))
+        self.assertIsNone(self.factory.parse(data=d.pack()))
         # bridge packets must not be accepted by the direct factory
         bridge = self.factory.data(b'hi', target=1, source=2, sn=3)
-        self.assertIsNone(self.direct_factory.parse(bridge.pack()))
+        self.assertIsNone(self.direct_factory.parse(data=bridge.pack()))
 
     def test_direct_copy_roundtrip(self):
         d = self.direct_factory.data(b'hello', sn=5)
-        c = self.direct_factory.copy(d)
+        c = self.direct_factory.copy(b'', packet=d)
         self.assertIsInstance(c, DirectPacket)
         self.assertEqual(c.sn, 5)
         self.assertEqual(c.command, Command.COPY)
-        parsed = self.direct_factory.parse(c.pack())
+        parsed = self.direct_factory.parse(data=c.pack())
         self.assertEqual(parsed.sn, 5)
         self.assertEqual(parsed.command, Command.COPY)
 
@@ -110,17 +109,17 @@ class TestPackets(unittest.TestCase):
             self.assertFalse(hasattr(self.direct_factory, name))
 
     def test_error_list(self):
-        self.assertIsNone(self.factory.parse(b'short'))
-        syn = self.factory.syn(request=b'{}', source=0)
+        self.assertIsNone(self.factory.parse(data=b'short'))
+        syn = self.factory.syn(b'{}', source=0)
         bad = bytearray(syn.pack())
         bad[0:4] = b'XXXX'
-        self.assertIsNone(self.factory.parse(bytes(bad)))
+        self.assertIsNone(self.factory.parse(data=bytes(bad)))
         bad = bytearray(syn.pack())
         bad[4] = (bad[4] & 0xF8) | 7
-        self.assertIsNone(self.factory.parse(bytes(bad)))
+        self.assertIsNone(self.factory.parse(data=bytes(bad)))
         # garbage tail: neither 0 nor 32 bytes
         bad = bytearray(syn.pack()) + b'\x00\x01\x02'
-        self.assertIsNone(self.factory.parse(bytes(bad)))
+        self.assertIsNone(self.factory.parse(data=bytes(bad)))
 
 
 if __name__ == '__main__':

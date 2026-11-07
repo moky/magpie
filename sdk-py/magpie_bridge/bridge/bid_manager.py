@@ -83,8 +83,7 @@ class BidManager:
         """Whether the bid table has reached max_records."""
         return len(self.__by_bid) >= self.__config.max_records
 
-    def add(self, bid: int, address: SocketAddress, secret: bytes,
-            now: float) -> Optional[Record]:
+    def add(self, bid: int, address: SocketAddress, secret: bytes, now: float) -> Optional[Record]:
         """Bind a new record after checking both indexes for conflicts.
 
         The capacity and both index tables are checked in one critical
@@ -94,7 +93,7 @@ class BidManager:
         Args:
             bid: the bridge id.
             address: the client socket address.
-            secret: the client secret.
+            secret: the message key.
             now: current epoch seconds.
 
         Returns:

@@ -28,8 +28,6 @@
 # SOFTWARE.
 # ==============================================================================
 
-from typing import Optional
-
 from .protocol import calc_cmd, calc_dsn, calc_ext
 from .protocol import calc_header_length
 from .protocol import Packet
@@ -71,12 +69,12 @@ class BridgePacket(BasePacket):
     #
 
     @classmethod
-    def create(cls, *, ack: int, target: int, source: int,
+    def create(cls, *, ack: int,
+               target: int, source: int,
                sn: int, index: int, count: int,
-               command: int, payload: Optional[bytes] = None) -> 'BridgePacket':
+               command: int,
+               payload: bytes) -> 'BridgePacket':
         """ Build a fresh BridgePacket from scratch (wire bytes not yet packed). """
-        if payload is None:
-            payload = b''
         cmd = calc_cmd(command=command)
         dsn = calc_dsn(sn=sn)
         ext = calc_ext(count=count)

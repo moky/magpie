@@ -52,7 +52,7 @@ class DirectPacketFactory(MessagePacketFactory):
     #   Handshake
     #
 
-    def syn(self, request: Optional[bytes] = None) -> DirectPacket:
+    def syn(self, request: bytes) -> DirectPacket:
         """ 1st handshake (SYN?): propose a peer-to-peer session.
 
             Args:
@@ -64,7 +64,7 @@ class DirectPacketFactory(MessagePacketFactory):
         return DirectPacket.create(ack=0, sn=0, index=0, count=1,
                                    command=Command.SYN, payload=request)
 
-    def syn_ack(self, response: Optional[bytes] = None) -> DirectPacket:
+    def syn_ack(self, response: bytes) -> DirectPacket:
         """ 2nd handshake (SYN!, A=1): accept the peer's proposal.
 
             Args:
@@ -76,7 +76,7 @@ class DirectPacketFactory(MessagePacketFactory):
         return DirectPacket.create(ack=1, sn=0, index=0, count=1,
                                    command=Command.SYN_ACK, payload=response)
 
-    def ack(self, response: Optional[bytes] = None) -> DirectPacket:
+    def ack(self, response: bytes) -> DirectPacket:
         """ 3rd handshake (ACK!, A=1): final acknowledgment of the session.
 
             Args:
@@ -92,7 +92,7 @@ class DirectPacketFactory(MessagePacketFactory):
     #   Heartbeat / shutdown / noop
     #
 
-    def ping(self, request: Optional[bytes] = None) -> DirectPacket:
+    def ping(self, request: bytes) -> DirectPacket:
         """ Heartbeat (PING): keep-alive between peers.
 
             Args:
@@ -104,7 +104,7 @@ class DirectPacketFactory(MessagePacketFactory):
         return DirectPacket.create(ack=0, sn=0, index=0, count=1,
                                    command=Command.PING, payload=request)
 
-    def fin(self, request: Optional[bytes] = None) -> DirectPacket:
+    def fin(self, request: bytes) -> DirectPacket:
         """ Shutdown (FIN?): close the peer-to-peer session.
 
             Args:
@@ -116,7 +116,7 @@ class DirectPacketFactory(MessagePacketFactory):
         return DirectPacket.create(ack=0, sn=0, index=0, count=1,
                                    command=Command.FIN, payload=request)
 
-    def noop(self, request: Optional[bytes] = None) -> DirectPacket:
+    def noop(self, request: bytes) -> DirectPacket:
         """ No-op (NOOP): keep the channel warm.
 
             Args:
@@ -132,7 +132,7 @@ class DirectPacketFactory(MessagePacketFactory):
     #   Reply factories (fields copied from the request).
     #
 
-    def pong(self, packet: Magpie, response: Optional[bytes] = None) -> DirectPacket:
+    def pong(self, response: bytes, packet: Magpie) -> DirectPacket:
         """ Reply (PONG, A=1): answer a peer's PING.
 
             Args:
@@ -145,7 +145,7 @@ class DirectPacketFactory(MessagePacketFactory):
         return DirectPacket.create(ack=1, sn=packet.sn, index=packet.index, count=packet.count,
                                    command=Command.PONG, payload=response)
 
-    def fin_ack(self, packet: Magpie, response: Optional[bytes] = None) -> DirectPacket:
+    def fin_ack(self, response: bytes, packet: Magpie) -> DirectPacket:
         """ Reply (FIN!, A=1): confirm a peer's FIN shutdown request.
 
             Args:
@@ -177,7 +177,7 @@ class DirectPacketFactory(MessagePacketFactory):
         return DirectPacket.create(ack=0, sn=sn, index=index, count=count,
                                    command=Command.EMPTY, payload=payload)
 
-    def copy(self, packet: Magpie, response: Optional[bytes] = None) -> DirectPacket:
+    def copy(self, response: bytes, packet: Magpie) -> DirectPacket:
         """ Reply (COPY, A=1): acknowledge a received DATA packet.
 
             Args:
@@ -211,12 +211,16 @@ class DirectPacketFactory(MessagePacketFactory):
         """
         packet = super().parse(data=data)
         if packet is None or packet.bid != 0:
+            # bridge packet not for this factory.
             return None
         size = packet.header_length + packet.payload_length
         tail = len(data) - size
         if tail == 0:
+            # direct packet without attachment
             return DirectPacket(packet=packet)
         if tail != ATTACHMENT_LENGTH:
+            # tail is neither 0 nor 32: bad packet.
             return None
+        # reliable packet with verify code
         attachment = data[size:size + ATTACHMENT_LENGTH]
         return ReliablePacket(packet=packet, attachment=attachment)

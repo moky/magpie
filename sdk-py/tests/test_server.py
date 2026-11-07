@@ -18,6 +18,7 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from magpie_bridge.bridge import Server, ServerConfig
+from magpie_bridge import ReliablePacket
 from magpie_bridge import BridgePacketFactory, Command
 
 PORT = 19527
@@ -33,10 +34,9 @@ def run():
     c = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     c.settimeout(3)
     req = json.dumps({'time': time.time(), 'pad': 'x' * 480}).encode()
-    c.sendto(factory.syn(request=req, source=0).pack(),
-             ('127.0.0.1', PORT))
+    c.sendto(factory.syn(req, source=0).pack(), ('127.0.0.1', PORT))
     data, _ = c.recvfrom(4096)
-    resp = factory.parse(data)
+    resp = factory.parse(data=data)
     assert resp.command == Command.SYN_ACK
     info = json.loads(resp.payload)
     bid = resp.target
@@ -48,37 +48,33 @@ def run():
         'pad': 'x' * 480,   # ACK! must be padded to >= handshake_min_payload
     }).encode()
     # plain (non-encrypted) mode: ACK! must NOT carry an attachment
-    c.sendto(factory.ack(response=ack_payload, source=bid).pack(),
-             ('127.0.0.1', PORT))
+    c.sendto(factory.ack(ack_payload, source=bid).pack(), ('127.0.0.1', PORT))
     time.sleep(0.3)
 
-    ping = factory.ping(
-        request=json.dumps({'time': time.time()}).encode(),
-        source=bid).sign(secret)
+    ping = factory.ping(json.dumps({'time': time.time()}).encode(), source=bid)
+    ping = ping.sign(secret=secret)
     c.sendto(ping.pack(), ('127.0.0.1', PORT))
     data, _ = c.recvfrom(4096)
-    pong = factory.parse(data)
+    pong = factory.parse(data=data)
     assert pong.command == Command.PONG and pong.target == bid
-    assert pong.verify(secret)
+    assert isinstance(pong, ReliablePacket) and pong.verify(secret=secret)
 
     body = json.dumps({'sources': [1, 2, 3]}).encode()
-    c.sendto(factory.acpt(request=body, source=bid)
-             .sign(secret).pack(), ('127.0.0.1', PORT))
+    c.sendto(factory.acpt(body, source=bid).sign(secret).pack(), ('127.0.0.1', PORT))
     data, _ = c.recvfrom(4096)
-    done = factory.parse(data)
+    done = factory.parse(data=data)
     assert done.command == Command.DONE
 
-    fin = factory.fin(
-        request=json.dumps({'time': time.time()}).encode(),
-        source=bid).sign(secret)
+    fin = factory.fin(json.dumps({'time': time.time()}).encode(), source=bid)
+    fin = fin.sign(secret=secret)
     c.sendto(fin.pack(), ('127.0.0.1', PORT))
     data, _ = c.recvfrom(4096)
-    fa = factory.parse(data)
+    fa = factory.parse(data=data)
     assert fa.command == Command.FIN_ACK
     # black-box check: after "FIN!" the record is offline — a properly
     # signed PING must be silently dropped (no PONG reply)
-    ping = factory.ping(request=json.dumps({'time': time.time()}).encode(),
-                        source=bid).sign(secret)
+    ping = factory.ping(json.dumps({'time': time.time()}).encode(), source=bid)
+    ping = ping.sign(secret=secret)
     c.settimeout(0.5)
     c.sendto(ping.pack(), ('127.0.0.1', PORT))
     try:

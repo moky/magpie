@@ -41,7 +41,7 @@ from .enigma import Enigma
 class SecretKeeper:
     """Owns the token keys and the enigma table.
 
-    - client secrets: freshly generated per handshake (32-byte random);
+    - message keys: freshly generated per handshake (32-byte random);
     - token keys: rotated every token_key_rotate_interval, the latest two
       are kept so tokens created before a rotation stay valid;
     - enigma table: reloaded from the app-secret file every
@@ -59,17 +59,21 @@ class SecretKeeper:
         self.__enigma_secrets: Dict[str, bytes] = {}
         self.__last_enigma_load = 0.0
 
+    #
+    #   Message Sign/Verify Key
+    #
+
     # noinspection PyMethodMayBeStatic
-    def new_secret(self) -> bytes:
-        """Generate a fresh 32-byte client secret."""
+    def new_message_key(self) -> bytes:
+        """Generate a fresh 32-byte message key."""
         return os.urandom(32)
 
     # noinspection PyMethodMayBeStatic
-    def encode_secret(self, secret: bytes) -> str:
-        """Encode a secret as base64 (ASCII).
+    def encode_message_key(self, secret: bytes) -> str:
+        """Encode a message key as base64 (ASCII).
 
         Args:
-            secret: the raw secret bytes.
+            secret: the raw message key bytes.
 
         Returns:
             the base64 string.
@@ -77,19 +81,19 @@ class SecretKeeper:
         return base64_encode(secret)
 
     # noinspection PyMethodMayBeStatic
-    def decode_secret(self, secret_b64: str) -> Optional[bytes]:
-        """Decode a secret from base64 (ASCII).
+    def decode_message_key(self, secret_b64: str) -> Optional[bytes]:
+        """Decode a message key from base64 (ASCII).
 
         Args:
             secret_b64: the base64 string.
 
         Returns:
-            the raw secret bytes.
+            the raw message key bytes.
         """
         return base64_decode(secret_b64)
 
     #
-    #   Enigma
+    #   Enigma (App Keys)
     #
 
     @property
@@ -155,7 +159,7 @@ class SecretKeeper:
 
     def enigma_encrypt(self, plaintext: bytes, candidates: List[str],
                        bid: int) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
-        """ Encrypt the client secret with a mutually-held enigma.
+        """ Encrypt the message key with a mutually-held enigma.
 
             Returns (ciphertext_b64, bundle) or (None, None) when no
             candidate matches; the bundle follows the JSON format of

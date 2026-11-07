@@ -28,8 +28,6 @@
 # SOFTWARE.
 # ==============================================================================
 
-from typing import Optional
-
 from .protocol import calc_cmd, calc_dsn, calc_ext
 from .protocol import calc_header_length
 from .protocol import Packet
@@ -71,10 +69,9 @@ class DirectPacket(BasePacket):
     @classmethod
     def create(cls, *, ack: int,
                sn: int, index: int, count: int,
-               command: int, payload: Optional[bytes] = None) -> 'DirectPacket':
+               command: int,
+               payload: bytes) -> 'DirectPacket':
         """ Build a fresh DirectPacket from scratch (wire bytes not yet packed). """
-        if payload is None:
-            payload = b''
         cmd = calc_cmd(command=command)
         dsn = calc_dsn(sn=sn)
         ext = calc_ext(count=count)

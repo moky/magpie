@@ -95,8 +95,7 @@ class MessagePacketFactory {
       // cut the tail here
       buffer = Uint8List.fromList(buffer.sublist(0, size));
     } else if (tail != 0) {
-      assert(false, 'UDP packet error: ${buffer.length} bytes,'
-          ' header_length=$hLen, payload_length=$pLen, tail=$tail');
+      // tail is neither 0 nor 32: bad packet.
       return null;
     }
 
