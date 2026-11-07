@@ -37,7 +37,7 @@ sequenceDiagram
 ```
 
 - "SYN?" 的 source bid 可以是 0（全新分配）或预设值（预订/内定，见架构文档）；
-- "SYN!" 中 token 基于 Token 密钥 + bid + secret + socket 计算，服务器无状态；
+- "SYN!" 中 token 基于 令牌密钥 + bid + secret + socket 计算，服务器无状态；
 - "ACK!" 验证通过才创建记录（创建即确认）；记录创建后 secret 不可变。
 
 ### 2.2 加密握手（Enigma）

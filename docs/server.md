@@ -370,7 +370,7 @@ AView.accept(A.record);   // 槽主 A 命中 → value |= 1 写回（或 accept(
 | noop_immunity_window | 2.0 | "NOOP" 免疫窗口（秒；窗口内 "FIN?" 应答但不标记 offline） |
 | app_secret_file | （空） | 应用密钥文件路径（示例：`# app_secret_file = /etc/magpie/private/enigma.json`） |
 | app_secret_reload_interval | 600.0 | 应用密钥重读周期（秒） |
-| token_key_rotate_interval | 60.0 | Token 密钥轮换周期（秒，保留最近 2 把） |
+| token_key_rotate_interval | 60.0 | 令牌密钥轮换周期（秒，保留最近 2 把） |
 | waiting_queue_size | 4096 | 等待处理队列容量（任务数） |
 | manager_queue_size | 1024 | 管理请求队列容量（任务数） |
 | forwarder_queue_size | 65536 | 每条转发线程的队列容量（任务数；最坏约 64 MiB/线程，按满载荷 1KiB 计） |

@@ -294,7 +294,7 @@ AView.accept(A.record);   // 槽主 A 命中 → value |= 1 写回（或 accept(
         return False
 ```
 
-### Token 密钥轮换与握手防洪
+### 令牌密钥轮换与握手防洪
 
 服务器内部维护一个**密钥组 token_keys**（列表，初始化时包含一个随机密钥，须用密码学安全随机数）与最后轮换时间 last_token_key_rotate，用于计算/验证握手令牌 token：
 

@@ -25,7 +25,7 @@
 
 | 密钥 | 变量名 | 长度 | 用途 | 存放 |
 |------|--------|------|------|------|
-| Token 密钥 | token_key | 默认 32B | 握手阶段对 token 签名 | 仅服务器内存（60 秒轮换，保留最近 2 把） |
+| 令牌密钥 | token_key | 默认 32B | 握手阶段对 token 签名 | 仅服务器内存（60 秒轮换，保留最近 2 把） |
 | 消息密钥 | secret | 默认 32B | 对所有握手后消息签名/验签 | 双端内存，生命周期与 bid record 相同 |
 | 应用密钥 | enigma | 任意长度 | 握手阶段对 secret 加密 | 服务器安全目录 + 客户端本地 |
 
@@ -313,6 +313,6 @@ bid 与 socket 绑定（socket 即身份，见架构文档）；若某 record �
 | record_active_timeout | 60.0s | 在线判定窗口；紧急自救回收时效逐轮减半的下限 |
 | record_recycle_interval | 600.0s（10 min） | 两次 purge 扫描之间的最小间隔 |
 | noop_immunity_window | 2.0s | "NOOP" 免疫窗口（防 "FIN?" 踢人；窗口内应答但不标记 offline） |
-| token_key_rotate_interval | 60.0s | Token 密钥轮换周期 |
+| token_key_rotate_interval | 60.0s | 令牌密钥轮换周期 |
 | app_secret_file | （空） | 应用密钥文件路径，配置示例 `# app_secret_file = /etc/magpie/private/enigma.json` |
 | app_secret_reload_interval | 600.0s | 应用密钥重读周期 |
