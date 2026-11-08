@@ -246,11 +246,10 @@ bid 与 socket 绑定（socket 即身份，见架构文档）；若某 record �
 
 - secret 密文：消息密钥 32 字节经 AES-256-GCM 加密（GCM 密文与明文等长 32 字节）→ Base64 44 字符；
 - token：HMAC-SHA256 32 字节 → Base64 44 字符；
-- hkdf.salt：16 字节一次性 CSPRNG → Base64 24 字符；
-- hkdf.info：`enigma-v1:bid=` + 最长 10 位 bid（共 24 字节）→ Base64 32 字符；
+- salt：16 字节一次性 CSPRNG → Base64 24 字符；
 - nonce：12 字节一次性 CSPRNG → Base64 16 字符；
 - tag：16 字节 GCM 认证标签 → Base64 24 字符；
-- enigma.key（6 字符）、algorithm（28 字符）、aad（空），time/UDP 与基础模式相同；连同 JSON 字段名与标点，压缩后载荷 ≤ 400 字节；
+- enigma.key（6 字符）、algorithm（28 字符），time/UDP 与基础模式相同；hkdf 的 info 与 AES-GCM 的 aad 按预约定公式由 bid 推导，不随密文传输；连同 JSON 字段名与标点，压缩后载荷 ≤ 400 字节；
 - 整包 = Header 20 + Payload ≤ 400 + UDP/IPv4 28 ≤ 448 字节。
 
 由上表可见，基础模式两组数据包的放大比分别是 0.429（240/560）和 0.12（67/560）；

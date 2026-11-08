@@ -100,13 +100,9 @@
     "enigma": {
         "key": "{enigma 键，通常是 6 字符}",
         "algorithm": "HKDF-SHA256+AES-256-GCM",
-        "hkdf": {
-            "salt": "{Base64 编码的 16 字节 salt，一次性 CSPRNG}",
-            "info": "{Base64 编码的二进制串 b'enigma-v1:bid=' + bid}"
-        },
+        "salt": "{Base64 编码的 16 字节 salt，一次性 CSPRNG}",
         "nonce": "{Base64 编码的 12 字节 nonce，一次性 CSPRNG}",
-        "tag": "{Base64 编码的 16 字节 tag}",
-        "aad": ""
+        "tag": "{Base64 编码的 16 字节 tag}"
     },
     "secret": "{Base64 编码的加密后的 secret，即 ciphertext}",
     "token":  "{Base64 编码的 token}",
@@ -136,13 +132,9 @@
     "enigma": {
         "key": "{enigma 键，通常是 6 字符}",
         "algorithm": "HKDF-SHA256+AES-256-GCM",
-        "hkdf": {
-            "salt": "{Base64 编码的 16 字节 salt，一次性 CSPRNG}",
-            "info": "{Base64 编码的二进制串 b'enigma-v1:bid=' + bid}"
-        },
+        "salt": "{Base64 编码的 16 字节 salt，一次性 CSPRNG}",
         "nonce": "{Base64 编码的 12 字节 nonce，一次性 CSPRNG}",
-        "tag": "{Base64 编码的 16 字节 tag}",
-        "aad": ""
+        "tag": "{Base64 编码的 16 字节 tag}"
     },
     "secret": "{Base64 编码的加密后的 secret，即 ciphertext}",
     "token":  "{Base64 编码的 token}",

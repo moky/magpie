@@ -34,7 +34,7 @@ from typing import List, Optional
 
 from .utils import log
 from .utils import SocketAddress, SharedCounters
-from .config import ServerConfig
+from .utils import ServerConfig
 from .bid_manager import BidManager
 
 from .thr_pre import Preprocessor

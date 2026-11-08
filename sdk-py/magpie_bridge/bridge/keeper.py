@@ -31,11 +31,12 @@
 import os
 import random
 import threading
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Optional, List, Dict, Any
 
-from .utils import log, base64_encode, base64_decode, generate_token, verify_token
-from .config import ServerConfig
-from .enigma import Enigma
+from .utils import log
+from .utils import base64_encode, base64_decode, generate_token, verify_token
+from .utils import ServerConfig
+from .utils import Enigma, HkdfEnc
 
 
 class SecretKeeper:
@@ -56,7 +57,7 @@ class SecretKeeper:
         self.__last_token_key_rotate = 0.0
         # enigma
         self.__lock = threading.Lock()  # guards the enigma table
-        self.__enigma_secrets: Dict[str, bytes] = {}
+        self.__enigma = Enigma()
         self.__last_enigma_load = 0.0
 
     #
@@ -98,11 +99,15 @@ class SecretKeeper:
 
     @property
     def enigma_empty(self) -> bool:
-        return len(self.__enigma_secrets) == 0
+        """Whether the enigma table is empty (plain handshake mode)."""
+        with self.__lock:
+            return self.__enigma.empty
 
     @property
     def enigma_count(self) -> int:
-        return len(self.__enigma_secrets)
+        """Number of enigma keys in the table."""
+        with self.__lock:
+            return self.__enigma.count
 
     def load_enigma_secrets(self, now: float):
         """Reload the app-secret (enigma) table from the config file.
@@ -129,14 +134,14 @@ class SecretKeeper:
                 log.warning('cryptography not available; encrypted mode disabled')
                 new = {}
         with self.__lock:
-            self.__enigma_secrets = new
+            self.__enigma = Enigma(secrets=new)
 
     def get_enigma_secret(self, key: str) -> Optional[bytes]:
         """ Look up an enigma key's secret bytes. """
         if key is None:
             return None
         with self.__lock:
-            return self.__enigma_secrets.get(key)
+            return self.__enigma.get_secret(key)
 
     def _choose_enigma(self, candidates: List[str]) -> Optional[str]:
         """Pick one enigma key from the candidates that the server knows.
@@ -148,7 +153,7 @@ class SecretKeeper:
             a known key, or None when none matches.
         """
         with self.__lock:
-            keys = [k for k in candidates if k in self.__enigma_secrets]
+            keys = [k for k in candidates if k in self.__enigma.key_names]
         count = len(keys)
         if count == 0:
             return None
@@ -157,54 +162,32 @@ class SecretKeeper:
         else:
             return random.choice(keys)
 
-    def enigma_encrypt(self, plaintext: bytes, candidates: List[str],
-                       bid: int) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    def enigma_encrypt(self, secret: bytes, candidates: List[str], bid: int) -> Optional[HkdfEnc]:
         """ Encrypt the message key with a mutually-held enigma.
 
-            Returns (ciphertext_b64, bundle) or (None, None) when no
-            candidate matches; the bundle follows the JSON format of
+            Returns the HkdfEnc carrying the ciphertext (serialise its
+            to_dict() into the 'enigma' field), or None when no candidate
+            matches; the bundle follows the JSON format of
             docs/protocol.md 6.1.
         """
         key = self._choose_enigma(candidates=candidates)
         if key is None:
-            return None, None
+            return None
+        enc = HkdfEnc.create(key=key, bid=bid)
         with self.__lock:
-            ikm = self.__enigma_secrets.get(key)
-        if ikm is None:
-            return None, None
-        box = Enigma.encrypt(ikm=ikm, plaintext=plaintext, bid=bid)
-        return box['ciphertext'], {
-            'key': key,
-            'algorithm': 'HKDF-SHA256+AES-256-GCM',
-            'hkdf': {
-                'salt': box['salt'],
-                'info': box['info'],
-            },
-            'nonce': box['nonce'],
-            'tag': box['tag'],
-            'aad': '',
-        }
+            return self.__enigma.encrypt_secret(secret=secret, enc=enc)
 
-    def enigma_decrypt(self, bundle: Dict[str, Any], secret_b64: str) -> Optional[bytes]:
+    def enigma_decrypt(self,  secret_b64: str, bundle: Dict[str, Any], bid: int) -> Optional[bytes]:
         """ Decrypt the ciphertext secret with the named enigma.
 
             Returns the plaintext secret bytes, or None when the key is
-            unknown to the server.
+            unknown to the server or the tag does not verify.
         """
-        key = bundle.get('key')
-        with self.__lock:
-            ikm = self.__enigma_secrets.get(key)
-        if ikm is None:
+        enc = HkdfEnc.parse(bundle=bundle, bid=bid)
+        if enc is None:
             return None
-        # decrypt
-        return Enigma.decrypt(
-            ikm=ikm,
-            salt=base64_decode(bundle['hkdf']['salt']),
-            info=base64_decode(bundle['hkdf']['info']),
-            nonce=base64_decode(bundle['nonce']),
-            ciphertext=base64_decode(secret_b64),
-            tag=base64_decode(bundle['tag'])
-        )
+        with self.__lock:
+            return self.__enigma.decrypt_secret(secret_b64=secret_b64, enc=enc)
 
     #
     #   Token Keys

@@ -31,14 +31,10 @@
 import base64
 import hashlib
 import json
-import logging
 import time
 from typing import Optional, Sequence, Any, List, Dict
 
-from ..x import HmacSha256
-
-
-log = logging.getLogger('magpie_bridge')
+from ...x import HmacSha256
 
 
 def utf8_encode(s: str) -> bytes:
@@ -58,10 +54,15 @@ def utf8_decode(d: bytes) -> Optional[str]:
 
 
 def hex_encode(d: bytes) -> str:
+    """ Encode bytes as a hex (ASCII) string. """
     return d.hex()
 
 
 def hex_decode(s: str) -> Optional[bytes]:
+    """ Decode a hex (ASCII) string.
+
+        Returns None when `s` is not valid hex.
+    """
     try:
         return bytes.fromhex(s)
     except ValueError:
@@ -143,6 +144,7 @@ def socket_identity_hash(socket_key: str) -> int:
 #
 
 def _concat_token(bid: int, secret: str, socket: str) -> bytes:
+    """Merge the token fields in key alphabetical order: bid, secret, socket."""
     text = f'bid={bid}&secret={secret}&socket={socket}'
     return utf8_encode(text)
 
@@ -187,14 +189,17 @@ class SocketAddress:
 
     @property
     def ip(self) -> str:
+        """ The IP address. """
         return self.__ip
 
     @property
     def port(self) -> int:
+        """ The UDP port. """
         return self.__port
 
     @property
     def host(self) -> str:
+        """ Alias of `ip`, kept for the connection-style API. """
         return self.__ip
 
     def key(self) -> str:
@@ -204,11 +209,14 @@ class SocketAddress:
         return '%s:%d' % (self.__ip, self.__port)
 
     def is_loopback(self) -> bool:
+        """Whether this is a loopback address (127.0.0.0/8 or ::1)."""
         if self.__ip == '::1' or self.__ip == '0:0:0:0:0:0:0:1':
             return True
         return self.__ip.startswith('127.')
 
     def is_broadcast_or_multicast(self) -> bool:
+        """Whether this is a broadcast/multicast address; packets from
+        such sources are dropped (amplification protection)."""
         ip = self.__ip
         if ':' in ip:
             return ip.lower().startswith('ff')

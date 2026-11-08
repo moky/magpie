@@ -39,7 +39,7 @@ from ..reliable import ReliablePacket
 
 from .utils import log, utf8_encode, json_encode
 from .utils import SocketAddress, SharedCounters
-from .config import ServerConfig
+from .utils import ServerConfig
 from .bid_manager import BidManager
 
 from .thr_worker import Worker

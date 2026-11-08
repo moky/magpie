@@ -36,11 +36,12 @@ from typing import Optional, Any, List
 from ..protocol import Command, Magpie
 from ..reliable import ReliablePacket
 
-from .utils import log, utf8_encode, json_encode
+from .utils import log
+from .utils import utf8_encode, base64_encode, json_encode
 from .utils import parse_json
 from .utils import SocketAddress, SharedCounters
+from .utils import ServerConfig
 
-from .config import ServerConfig
 from .keeper import SecretKeeper
 from .record import Record, PermitView
 from .bid_manager import BidManager
@@ -203,17 +204,15 @@ class Manager(Worker):
 
         keeper = self.__secrets
         # pick enigma / encrypt
-        enigma_bundle = None
         if self.encrypted_mode:
             requested = info.get('enigmas')
             if not isinstance(requested, list) or not requested:
                 return
-            b64, bundle = keeper.enigma_encrypt(plaintext=secret,
-                                                candidates=requested,
-                                                bid=bid)
-            enigma_bundle = bundle
-            secret_b64 = b64
+            enc = keeper.enigma_encrypt(secret=secret, candidates=requested, bid=bid)
+            enigma_bundle = enc.to_dict()
+            secret_b64 = base64_encode(enc.ciphertext)
         else:
+            enigma_bundle = None
             secret_b64 = keeper.encode_message_key(secret=secret)
 
         # token: "bid={bid}&secret={secret}&socket={socket}"
@@ -278,7 +277,8 @@ class Manager(Worker):
                 return
             # decrypt secret
             try:
-                secret = keeper.enigma_decrypt(bundle=bundle, secret_b64=secret_b64)
+                secret = keeper.enigma_decrypt(bundle=bundle, secret_b64=secret_b64,
+                                               bid=bid)
             except Exception as error:
                 log.warning('failed to decrypt secret: %s, remote: %s, error: %s',
                             secret_b64, address, error)

@@ -102,7 +102,7 @@ sequenceDiagram
     C->>M: "SYN?"（enigmas: [键列表]，载荷≥512B，无校验码）
     M->>M: 取键交集任选 enigma → HKDF-SHA256 派生 AES-256 密钥
     M->>M: AES-GCM 加密 secret → (ciphertext, tag)
-    M-->>C: "SYN!"（enigma: {key, algorithm, hkdf, nonce, tag, aad} + secret=密文 + token）
+    M-->>C: "SYN!"（enigma: {key, algorithm, salt, nonce, tag} + secret=密文 + token）
     C->>C: 用本地 enigma 解密得到 secret 明文，校验通过后保存
     C->>M: "ACK!"（原样回传加密参数 + HMAC(secret明文, header+payload) 校验码）
     M->>M: ① 查 enigma 键 ② 验 token（取载荷密文）③ 解密 secret ④ 验校验码（明文）

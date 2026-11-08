@@ -39,7 +39,7 @@ pip install magpie-bridge[enigma]    # base package + cryptography
 
 Without it, the SDK still works: packet packing/parsing and the
 plain-handshake mode are unaffected; only the encrypted handshake mode
-is unavailable (`Enigma.encrypt/decrypt` raise an explicit
+is unavailable (`Enigma.encrypt_secret/decrypt_secret` raise an explicit
 `RuntimeError`).
 
 ## Server

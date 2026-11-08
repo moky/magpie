@@ -32,7 +32,7 @@ import random
 import threading
 from typing import Dict, List, Optional
 
-from .config import ServerConfig
+from .utils import ServerConfig
 from .utils import SocketAddress
 from .record import Record
 

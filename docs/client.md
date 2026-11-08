@@ -167,7 +167,7 @@ sequenceDiagram
     participant S as 服务器
 
     C->>S: "SYN?"（enigmas: [本地持有的 enigma 键列表]，填充≥512B，无校验码）
-    S-->>C: "SYN!"（enigma: {key, algorithm, hkdf, nonce, tag, aad} + secret=密文 + token）
+    S-->>C: "SYN!"（enigma: {key, algorithm, salt, nonce, tag} + secret=密文 + token）
     C->>C: 用本地对应 enigma 解密 secret（AES-GCM，tag 校验）
     C->>S: "ACK!"（回传加密参数 + HMAC(secret明文, header+payload) 校验码）
     Note over C,S: 服务器解密验证通过 → 连接建立

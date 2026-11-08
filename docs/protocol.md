@@ -318,13 +318,9 @@ Command 与标志位组合定义各类消息包：
     "enigma": {
         "key": "{enigma 键，通常是 6 字符}",
         "algorithm": "HKDF-SHA256+AES-256-GCM",
-        "hkdf": {
-            "salt": "{Base64 编码的 16 字节 salt，一次性 CSPRNG}",
-            "info": "{Base64 编码的二进制串 b'enigma-v1:bid=' + bid}"
-        },
+        "salt": "{Base64 编码的 16 字节 salt，一次性 CSPRNG}",
         "nonce": "{Base64 编码的 12 字节 nonce，一次性 CSPRNG}",
-        "tag": "{Base64 编码的 16 字节 tag}",
-        "aad": ""
+        "tag": "{Base64 编码的 16 字节 tag}"
     },
     "secret": "{Base64 编码的加密后的 secret，即 ciphertext}",
     "token":  "{Base64 编码的 token}",
@@ -336,6 +332,9 @@ Command 与标志位组合定义各类消息包：
 ```
 
 > 加密算法：以 enigma（解码后二进制）为 HKDF ikm，HKDF-SHA256 派生 32 字节 AES-256 密钥，AES-GCM 加密 secret（nonce 12 字节、tag 16 字节，一次性 CSPRNG）。
+>
+> HKDF 的 `info` 与 AES-GCM 的 `aad` 为两端预先约定的公式，不随密文传输：
+> `info = utf8('enigma-v1:bid=' + bid)`，`aad = utf8('magpie-v1:bid=' + bid)`。salt 与 nonce 是每次加密新掷的随机量，必须随密文下发。
 
 #### 第三次握手 "ACK!"
 
@@ -358,7 +357,7 @@ Command 与标志位组合定义各类消息包：
 
 ```json
 {
-    "enigma": { "key": "...", "algorithm": "...", "hkdf": {...}, "nonce": "...", "tag": "...", "aad": "" },
+    "enigma": { "key": "...", "algorithm": "...", "salt": "...", "nonce": "...", "tag": "..." },
     "secret": "{Base64 编码的加密后的 secret，即 ciphertext}",
     "token":  "{Base64 编码的 token}",
 

@@ -17,7 +17,8 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from magpie_bridge.bridge import Server, ServerConfig
+from magpie_bridge.bridge.utils import ServerConfig
+from magpie_bridge.bridge import Server
 from magpie_bridge import ReliablePacket
 from magpie_bridge import BridgePacketFactory, Command
 
