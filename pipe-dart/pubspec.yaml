@@ -1,0 +1,20 @@
+name: magpipe
+description: >-
+  Magpie Bridge pipe transport: shared-socket UDP connections (hub),
+  packet framing for bridge/direct links, and the enigma secret box
+  (HKDF-SHA256 + AES-256-GCM).
+version: 0.3.0
+homepage: https://github.com/moky/magpie
+repository: https://github.com/moky/magpie
+issue_tracker: https://github.com/moky/magpie/issues
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  pointycastle: ^3.8.0
+  magpie_bridge: ^0.3.1
+
+dev_dependencies:
+  lints: ^3.0.0
+  test: ^1.24.0
