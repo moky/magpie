@@ -147,7 +147,7 @@ sequenceDiagram
     C->>S: "SYN?"（source=0 或预订 bid，载荷≥512B，填充，无校验码）
     S-->>C: "SYN!"（secret, token, UDP）
     C->>C: 保存 secret
-    C->>S: "ACK!"（source=bid，原样回传 3 参数，无校验码）
+    C->>S: "ACK!"（source=bid，原样回传 2 个握手参数 secret/token，无校验码）
     Note over C,S: 连接建立
 ```
 
@@ -173,7 +173,7 @@ sequenceDiagram
     Note over C,S: 服务器解密验证通过 → 连接建立
 ```
 
-- 客户端把 "SYN!" 载荷中的 "enigma" 参数原样回传（"ACK!" 载荷 = "SYN!" 的 3 个握手参数 + enigma + 填充）；
+- 客户端把 "SYN!" 载荷中的 "enigma" 参数原样回传（"ACK!" 载荷 = 原样回传 "SYN!" 中的 enigma/secret/token + 填充）；
 - 解密失败（tag 校验不过）说明密钥不匹配或握手被篡改，放弃本次握手；
 - 加密模式 "ACK!" **必须带** 32 字节校验码（用解密后的 secret 明文计算）。
 

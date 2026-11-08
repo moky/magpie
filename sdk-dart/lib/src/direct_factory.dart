@@ -152,9 +152,9 @@ class DirectPacketFactory extends MessagePacketFactory {
   /// request.
   DirectPacket pong(Uint8List response, Magpie packet) => DirectPacket.create(
     ack: 1,
-    sn: packet.sn,
-    index: packet.index,
-    count: packet.count,
+    sn: packet.sn,          // 0
+    index: packet.index,    // 0
+    count: packet.count,    // 1
     command: Command.PONG,
     payload: response,
   );
@@ -168,9 +168,9 @@ class DirectPacketFactory extends MessagePacketFactory {
   /// request.
   DirectPacket finAck(Uint8List response, Magpie packet) => DirectPacket.create(
     ack: 1,
-    sn: packet.sn,
-    index: packet.index,
-    count: packet.count,
+    sn: packet.sn,          // 0
+    index: packet.index,    // 0
+    count: packet.count,    // 1
     command: Command.FIN_ACK,
     payload: response,
   );

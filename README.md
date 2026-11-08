@@ -2,9 +2,12 @@
 
 [![License](https://img.shields.io/github/license/moky/magpie)](https://github.com/moky/magpie/blob/main/LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](https://github.com/moky/magpie/pulls)
+[![Platform](https://img.shields.io/badge/Platform-Dart%20%7C%20Python-brightgreen.svg)](https://github.com/moky/magpie/tree/main/docs)
 [![Issues](https://img.shields.io/github/issues/moky/magpie)](https://github.com/moky/magpie/issues)
 [![Repo Size](https://img.shields.io/github/repo-size/moky/magpie)](https://github.com/moky/magpie/archive/refs/heads/main.zip)
 [![Tags](https://img.shields.io/github/tag/moky/magpie)](https://github.com/moky/magpie/tags)
+[![PyPI](https://img.shields.io/pypi/v/magpie-bridge)](https://pypi.org/project/magpie-bridge)
+[![Pub](https://img.shields.io/pub/v/magpie_bridge)](https://pub.dev/packages/magpie_bridge)
 
 [![Watchers](https://img.shields.io/github/watchers/moky/magpie)](https://github.com/moky/magpie/watchers)
 [![Forks](https://img.shields.io/github/forks/moky/magpie)](https://github.com/moky/magpie/forks)
@@ -80,6 +83,7 @@ Dart SDK 的说明见 [sdk-dart/README.md](sdk-dart/README.md)。
 | [docs/server.md](docs/server.md)                              | 服务器运维 —— 部署、配置与调优                     |
 | [docs/client.md](docs/client.md)                              | 示例应用 —— 测试客户端说明                         |
 | [sdk-dart/README.md](sdk-dart/README.md)                      | Dart SDK —— 安装、接口与示例                       |
+| [sdk-py/README.md](sdk-py/README.md)                          | Python SDK —— 安装、服务器配置与示例               |
 
 设计思路（[`design/`](design/)）中存放任务说明，docs/ 由前者生成。
 

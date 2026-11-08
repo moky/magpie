@@ -1,5 +1,18 @@
 # magpie_bridge
 
+[![License](https://img.shields.io/github/license/moky/magpie)](https://github.com/moky/magpie/blob/main/LICENSE)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](https://github.com/moky/magpie/pulls)
+[![Platform](https://img.shields.io/badge/Platform-Dart%203-brightgreen.svg)](https://github.com/moky/magpie/tree/main/docs)
+[![Issues](https://img.shields.io/github/issues/moky/magpie)](https://github.com/moky/magpie/issues)
+[![Repo Size](https://img.shields.io/github/repo-size/moky/magpie)](https://github.com/moky/magpie/archive/refs/heads/main.zip)
+[![Tags](https://img.shields.io/github/tag/moky/magpie)](https://github.com/moky/magpie/tags)
+[![Version](https://img.shields.io/pub/v/magpie_bridge)](https://pub.dev/packages/magpie_bridge)
+
+[![Watchers](https://img.shields.io/github/watchers/moky/magpie)](https://github.com/moky/magpie/watchers)
+[![Forks](https://img.shields.io/github/forks/moky/magpie)](https://github.com/moky/magpie/forks)
+[![Stars](https://img.shields.io/github/stars/moky/magpie)](https://github.com/moky/magpie/stargazers)
+[![Followers](https://img.shields.io/github/followers/moky)](https://github.com/orgs/moky/followers)
+
 Magpie Bridge (MP) — UDP relay messaging protocol SDK for Dart.
 
 A compact datagram protocol for messaging over UDP: a fixed 8-byte header
@@ -19,7 +32,7 @@ peer-to-peer **direct**), and an optional HMAC-SHA256 integrity tag.
 
 ```yaml
 dependencies:
-  magpie_bridge: ^0.2.0
+  magpie_bridge: ^0.3.0
 ```
 
 ```dart
@@ -66,7 +79,7 @@ final pkt = bridge.data(
 final wire = pkt.pack();
 
 // the receiver replies COPY (A=1) echoing sn/index/count
-final copy = bridge.copy(pkt);
+final copy = bridge.copy(Uint8List(0), pkt);   // empty ack body
 ```
 
 ### Direct (peer-to-peer) packets
@@ -116,8 +129,8 @@ The `MacGenerator` interface you inject is:
 
 ```dart
 abstract interface class MacGenerator {
-  Uint8List generate(Uint8List key, Uint8List data);
-  bool verify(Uint8List key, Uint8List data, Uint8List tag);
+  Uint8List generate({required Uint8List secret, required Uint8List message});
+  bool verify(Uint8List tag, {required Uint8List secret, required Uint8List message});
 }
 ```
 

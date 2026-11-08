@@ -1,6 +1,6 @@
 name: magpie_bridge
 description: Magpie Bridge - Messaging Protocol on UDP.
-version: 0.3.0
+version: 0.3.1
 homepage: https://github.com/moky/magpie
 repository: https://github.com/moky/magpie
 issue_tracker: https://github.com/moky/magpie/issues

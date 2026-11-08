@@ -143,7 +143,7 @@ class BasePacket(Packet):
         """
         # pack() yields header + payload only; the attachment stays separate.
         base = self.__packet.pack()
-        digest = HmacSha256.generate(key=secret, data=base)
+        digest = HmacSha256.generate(secret=secret, message=base)
         return ReliablePacket(packet=self.__packet, attachment=digest)
 
 
@@ -205,4 +205,4 @@ class ReliablePacket(BasePacket):
             return False
         # Re-pack header + payload (without attachment) the same way sign() did.
         base = super().pack()
-        return HmacSha256.verify(key=secret, data=base, tag=digest)
+        return HmacSha256.verify(digest, secret=secret, message=base)

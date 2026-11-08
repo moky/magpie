@@ -41,48 +41,50 @@ import 'dart:typed_data';
 /// A MAC is a fixed-size byte tag derived from a secret key and input data,
 /// providing both data integrity and origin authentication.
 abstract interface class MacGenerator {
-  /// Generate MAC tag from secret [key] and input [data].
+  /// Generate MAC tag over the [message] with the [secret] key.
   ///
-  /// [key] is the secret cryptographic key.
-  /// [data] is the input binary payload.
+  /// [secret] is the secret cryptographic key.
+  /// [message] is the input binary payload.
   ///
   /// Returns fixed-size MAC tag as [Uint8List].
-  Uint8List generate(Uint8List key, Uint8List data);
+  Uint8List generate({required Uint8List secret, required Uint8List message});
 
   /// Constant-time verify MAC tag.
   ///
-  /// Re-computes MAC from [key] and [data], then compares against [tag]
+  /// Re-computes MAC from [secret] and [message], then compares against [tag]
   /// using side-channel safe comparison.
   ///
   /// Returns true only if the tag matches.
-  bool verify(Uint8List key, Uint8List data, Uint8List tag);
+  bool verify(Uint8List tag, {required Uint8List secret, required Uint8List message});
 }
 
 /// HMAC-SHA-256 utility (facade for [MacGenerator]).
 ///
 /// Computes and verifies HMAC-SHA-256 authentication tag (32-byte / 256-bit).
-final class HmacSha256 {
+class HmacSha256 {
   HmacSha256._();
 
   /// Generate HMAC-SHA-256 MAC tag.
   ///
-  /// [key] is the secret key.
-  /// [data] is the input binary payload.
+  /// [secret] is the secret key.
+  /// [message] is the input binary payload.
   ///
   /// Returns the 32-byte MAC tag as [Uint8List].
-  static Uint8List generate(Uint8List key, Uint8List data) {
-    return generator!.generate(key, data);
-  }
+  static Uint8List generate({
+    required Uint8List secret,
+    required Uint8List message
+  }) => generator!.generate(secret: secret, message: message);
 
   /// Constant-time verify HMAC-SHA-256 tag.
   ///
-  /// Re-computes MAC from [key] and [data], then compares against [tag]
+  /// Re-computes MAC from [secret] and [message], then compares against [tag]
   /// using side-channel safe comparison.
   ///
   /// Returns true only if the tag matches.
-  static bool verify(Uint8List key, Uint8List data, Uint8List tag) {
-    return generator!.verify(key, data, tag);
-  }
+  static bool verify(Uint8List tag, {
+    required Uint8List secret,
+    required Uint8List message
+  }) => generator!.verify(tag, secret: secret, message: message);
 
   /// The [MacGenerator] implementation (null before set).
   static MacGenerator? generator;

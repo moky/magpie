@@ -44,12 +44,12 @@ class MacGenerator(ABC):
     """
 
     @abstractmethod
-    def generate(self, key: bytes, data: bytes) -> bytes:
-        """ Generate MAC tag from secret key and input data.
+    def generate(self, *, secret: bytes, message: bytes) -> bytes:
+        """ Generate MAC tag over the message with the secret key.
 
             Args:
-                key: secret cryptographic key.
-                data: input binary payload.
+                secret: secret cryptographic key.
+                message: input binary payload.
 
             Returns:
                 Fixed-size MAC tag as bytes.
@@ -59,16 +59,16 @@ class MacGenerator(ABC):
         )
 
     @abstractmethod
-    def verify(self, key: bytes, data: bytes, tag: bytes) -> bool:
+    def verify(self, tag: bytes, *, secret: bytes, message: bytes) -> bool:
         """ Constant-time verify MAC tag.
 
-            Re-computes MAC from key and data, then compares against tag
-            using side-channel safe comparison.
+            Re-computes MAC from secret and message, then compares against
+            the tag using side-channel safe comparison.
 
             Args:
-                key: secret cryptographic key.
-                data: input binary payload.
                 tag: MAC tag to check.
+                secret: secret cryptographic key.
+                message: input binary payload.
 
             Returns:
                 True only if the tag matches.
@@ -82,13 +82,13 @@ class _StdlibMacGenerator(MacGenerator):
     """ Default MacGenerator on top of the standard hmac module. """
 
     # Override
-    def generate(self, key: bytes, data: bytes) -> bytes:
-        # return hmac_module.new(key, data, hashlib.sha256).digest()
-        return hmac_module.digest(key, data, 'sha256')
+    def generate(self, *, secret: bytes, message: bytes) -> bytes:
+        # return hmac_module.new(secret, message, hashlib.sha256).digest()
+        return hmac_module.digest(secret, message, 'sha256')
 
     # Override
-    def verify(self, key: bytes, data: bytes, tag: bytes) -> bool:
-        computed = self.generate(key=key, data=data)
+    def verify(self, tag: bytes, *, secret: bytes, message: bytes) -> bool:
+        computed = self.generate(secret=secret, message=message)
         return hmac_module.compare_digest(tag, computed)
 
 
@@ -104,31 +104,31 @@ class HmacSha256:
     generator: MacGenerator = _StdlibMacGenerator()
 
     @staticmethod
-    def generate(key: bytes, data: bytes) -> bytes:
+    def generate(*, secret: bytes, message: bytes) -> bytes:
         """ Generate HMAC-SHA256 MAC tag.
 
             Args:
-                key: secret cryptographic key.
-                data: input binary payload.
+                secret: secret cryptographic key.
+                message: input binary payload.
 
             Returns:
                 The 32-byte MAC tag as bytes.
         """
-        return HmacSha256.generator.generate(key=key, data=data)
+        return HmacSha256.generator.generate(secret=secret, message=message)
 
     @staticmethod
-    def verify(key: bytes, data: bytes, tag: bytes) -> bool:
+    def verify(tag: bytes, *, secret: bytes, message: bytes) -> bool:
         """ Constant-time verify HMAC-SHA256 tag.
 
-            Re-computes MAC from key and data, then compares against tag
-            using side-channel safe comparison.
+            Re-computes MAC from secret and message, then compares against
+            the tag using side-channel safe comparison.
 
             Args:
-                key: secret cryptographic key.
-                data: input binary payload.
                 tag: MAC tag to check.
+                secret: secret cryptographic key.
+                message: input binary payload.
 
             Returns:
                 True only if the tag matches.
         """
-        return HmacSha256.generator.verify(key=key, data=data, tag=tag)
+        return HmacSha256.generator.verify(tag, secret=secret, message=message)

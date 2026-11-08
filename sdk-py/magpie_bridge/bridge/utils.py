@@ -153,7 +153,7 @@ def generate_token(token_key: bytes,
        "bid={bid}&secret={secret}&socket={socket}"))
        fields are merged in key alphabetical order."""
     data = _concat_token(bid=bid, secret=secret_b64, socket=socket_key)
-    tag = HmacSha256.generate(key=token_key, data=data)
+    tag = HmacSha256.generate(secret=token_key, message=data)
     return base64_encode(tag)
 
 
@@ -165,7 +165,7 @@ def verify_token(token: str, token_keys: Sequence[bytes],
         return False
     data = _concat_token(bid=bid, secret=secret_b64, socket=socket_key)
     for key in token_keys:
-        if HmacSha256.verify(key=key, data=data, tag=tag):
+        if HmacSha256.verify(tag, secret=key, message=data):
             return True
     return False
 

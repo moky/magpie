@@ -15,4 +15,4 @@ export 'src/reliable.dart';  // BasePacket / ReliablePacket / sign / verify
 export 'src/direct.dart';    // DirectPacket (B=0)
 export 'src/bridge.dart';    // BridgePacket (B=1)
 
-export 'src/utils.dart';     // Hash-Based Message Authentication Code
+export 'src/x.dart';     // Hash-Based Message Authentication Code

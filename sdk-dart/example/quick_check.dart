@@ -92,6 +92,12 @@ void main() {
   print('  -> sn=${parsed!.sn} target=${parsed.target} source=${parsed.source} hasCmd=${parsed.cmd}');
   print('  -> ${parsed.toHumanReadableString()}');
 
+  // 2b. COPY acknowledgement echoes sn/index/count (A=1)
+  final copy = bridge.copy(Uint8List(0), pkt);
+  parsed = bridge.parse(copy.pack());
+  assert(parsed != null && parsed.ack == 1);
+  print('COPY ack: ack=${parsed!.ack} sn=${parsed.sn}');
+
   // 3. signed packet
   final secret = Uint8List.fromList(List.filled(32, 7));
   final ping = bridge.ping(payload, source: 123);
@@ -103,6 +109,11 @@ void main() {
   final rp = parsed as ReliablePacket;
   print('  -> verify(good)=${rp.verify(secret)} verify(bad)=${rp.verify(Uint8List(32))}');
 
+  // 3b. secret rotation: re-signing replaces the attachment in one call
+  final rotated = rp.sign(Uint8List.fromList(List.filled(32, 9)));
+  assert(rotated.verify(Uint8List.fromList(List.filled(32, 9))));
+  print('  -> re-sign: verify(new)=${rotated.verify(Uint8List.fromList(List.filled(32, 9)))} verify(old)=${rotated.verify(secret)}');
+
   // 4. DirectPacket
   final d = direct.data(Uint8List.fromList([9, 9, 9]), sn: 7, index: 0, count: 1);
   final wire4 = d.pack();
@@ -113,7 +124,7 @@ void main() {
 
   // 5. bad packets
   assert(bridge.parse(Uint8List(4)) == null);
-  print('bad-to-short: OK');
+  print('bad-too-short: OK');
 
   print('\nAll round-trip checks passed.');
 }

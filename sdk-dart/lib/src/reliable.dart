@@ -32,7 +32,7 @@ import 'dart:typed_data';
 
 import 'protocol/magpie.dart';
 import 'protocol/protocol.dart';
-import 'utils.dart';
+import 'x.dart';
 
 /// Delegation base shared by all public packet classes.
 ///
@@ -101,7 +101,7 @@ class BasePacket implements Packet {
   ReliablePacket sign(Uint8List secret) {
     // pack() yields header + payload only; the attachment stays separate.
     final base = _packet.pack();
-    final tag = HmacSha256.generate(secret, base);
+    final tag = HmacSha256.generate(secret: secret, message: base);
     return ReliablePacket(_packet, tag);
   }
 
@@ -159,7 +159,7 @@ class ReliablePacket extends BasePacket {
     }
     // Re-pack header+payload (without attachment) the same way sign() did.
     final base = _packet.pack();
-    return HmacSha256.verify(secret, base, tag);
+    return HmacSha256.verify(tag, secret: secret, message: base);
   }
 
 }

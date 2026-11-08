@@ -49,15 +49,16 @@ extension _ConstantTimeComparison on Uint8List {
 class _Hmac implements MacGenerator {
 
   @override
-  Uint8List generate(Uint8List key, Uint8List data) {
-    return _hmacSha256(secret: key, message: data);
-  }
+  Uint8List generate({
+    required Uint8List secret,
+    required Uint8List message
+  }) => _hmacSha256(secret: secret, message: message);
 
   @override
-  bool verify(Uint8List key, Uint8List data, Uint8List tag) {
-    final computed = _hmacSha256(secret: key, message: data);
-    return computed.equals(tag);
-  }
+  bool verify(Uint8List tag, {
+    required Uint8List secret,
+    required Uint8List message
+  }) => _hmacSha256(secret: secret, message: message).equals(tag);
 
 }
 
