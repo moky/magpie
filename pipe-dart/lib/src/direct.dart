@@ -33,13 +33,15 @@ import 'dart:typed_data';
 import 'package:magpie_bridge/protocol.dart';
 import 'package:magpie_bridge/factory.dart';
 
+import 'utils/payload.dart';
+
 import 'link.dart';
 import 'pipe.dart';
 
 /// Link to a peer directly (B=0): the three-way handshake (SYN?/SYN!/
 /// ACK!) establishes the connection without secret/token; data packets
 /// are answered with "COPY" and handed to the pipe to process.
-class DirectLink extends BaseLink {
+class DirectLink extends BaseLink with PayloadMixIn {
   DirectLink(super.socket, super.remote, {required super.enigma});
 
   final packetFactory = DirectPacketFactory();
@@ -88,11 +90,8 @@ class DirectLink extends BaseLink {
       return;
     }
     now ??= DateTime.now();
-    // idle check: now - max(lastSendTime, lastReceivedTime) > H
-    final last = lastActiveTime;
-    final idle = last == null ? null : now.difference(last);
-    if (idle == null || idle.inMilliseconds < config.heartbeatInterval * 1000) {
-      return;  // no traffic yet, or traffic is recent: no ping needed
+    if (!needsHeartbeat(now)) {
+      return;
     }
     final request = {
       'time': now.millisecondsSinceEpoch / 1000.0,
@@ -130,20 +129,6 @@ class DirectLink extends BaseLink {
     ready = true;
   }
 
-  /// Answer "COPY" to a data packet from the peer: sn/index are paired
-  /// automatically so the sender's queue can dequeue (docs/client.md
-  /// §4.2, §9).
-  void _replyCopy(Magpie packet) {
-    final request = {
-      'time': DateTime.now().millisecondsSinceEpoch / 1000.0,
-    };
-    sendPacket(packetFactory.copy(
-      encodePayload(request),
-      packet,
-    ));
-    // lastSendTime is refreshed by sendPacket()
-  }
-
   /// Reply "FIN!" to the peer's "FIN?" (minimal wave - the reverse
   /// close is up to the upper layer).
   void _replyFin(Magpie packet) {
@@ -159,7 +144,8 @@ class DirectLink extends BaseLink {
   /// Build a pipe bound to this connection: the application must plug
   /// a custom [PipeFactory] via [PipeExtensions].
   DirectPipe? _newPipe() {
-    return sharedPipeExtensions.pipeFactory?.createDirectPipe(this);
+    final pipeFactory = sharedPipeExtensions.pipeFactory;
+    return pipeFactory?.createDirectPipe(this);
   }
 
   @override
@@ -191,17 +177,9 @@ class DirectLink extends BaseLink {
         // close is up to the upper layer)
         _replyFin(packet);
         return;
-      case Command.PONG:
-      case Command.COPY:
-        // consumed by the app via the packet factory
-        return;
     }
-    // data packet from the peer (A=0, D=1): answer "COPY" with sn/index
-    // paired (docs/client.md §4.2, §9)
-    if (packet.ack == 0 && packet.sn != 0) {
-      _replyCopy(packet);
-    }
-    // hand DATA/PONG to the pipe: merge fragments on DATA, measure RTT
+    // hand DATA/COPY/PONG to the pipe: dequeue the sending
+    // queue on COPY, merge fragments on DATA, measure RTT
     // on PONG, etc.
     final pipe = getPipe(0);
     pipe?.processPacket(packet);

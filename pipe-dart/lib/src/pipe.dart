@@ -30,33 +30,25 @@
  */
 import 'dart:typed_data';
 
-import 'package:magpie_bridge/magpie.dart';
 import 'package:magpie_bridge/factory.dart';
+import 'package:magpie_bridge/protocol.dart';
+
+import 'utils/payload.dart';
 
 import 'bridge.dart';
 import 'direct.dart';
 
-/// Pipe base class: processes data packets forwarded by the MagLink.
+/// Pipe: processes data packets forwarded by the MagLink.
 ///
-/// Single packets are delivered directly via [onMessage]; fragmented
-/// packets wait for all fragments to arrive and reassemble before the
-/// callback fires (the reassembly flow is documented in [process] and is
-/// meant to be overridden by the application).
+/// The application inherits this class and overrides [MagPipe.processPacket]
+/// to implement its own receiving logic (dedup by sn, fragment reassembly
+/// and delivery of the payload, docs/client.md §4.2).
 abstract interface class MagPipe {
 
-  /// Handle one data packet forwarded by the connection.
-  ///
-  /// Single packets are delivered directly; fragmented packets wait for
-  /// all fragments to arrive and reassemble before the callback fires
-  /// (the reassembly flow is documented here and is meant to be
-  /// overridden by the application):
-  ///
-  ///  1. buffer the fragment indexed by `packet.index`;
-  ///  2. when every fragment `0..count-1` has arrived, concatenate them
-  ///     in ascending index order into the original buffer;
-  ///  3. fire [onMessage] with the reassembled payload and clear the
-  ///     buffer for the next `sn`.
-  void processPacket(Magpie packet);
+  /// Handle one data packet forwarded by the connection: the default
+  /// implementation answers "COPY" to data packets (A=0, D=1) and
+  /// "PONG" to heartbeats.
+  void processPacket(Packet packet);
 
   bool sendPacket(Magpie packet);
 
@@ -68,7 +60,7 @@ abstract interface class MagPipe {
 
 }
 
-abstract class DirectPipe implements MagPipe {
+class DirectPipe with PayloadMixIn implements MagPipe {
   DirectPipe(this.connection);
 
   /// The connection this pipe is attached to.
@@ -93,23 +85,53 @@ abstract class DirectPipe implements MagPipe {
     return sendPacket(packet);
   }
 
+  /// Answer "PONG" to the peer's "PING": echo the payload except
+  /// 'time', which is updated to the local clock (docs/client.md §6).
+  @override
+  void processPacket(Packet packet) {
+    if (packet.cmd == 1 && packet.command == Command.PING) {
+      // heartbeat from the peer: answer "PONG" (docs/client.md §6)
+      _replyPong(packet);
+    } else if (packet.ack == 0 && packet.dsn == 1) {
+      // data packet from the peer (A=0, D=1): answer "COPY" with sn/index
+      // paired (docs/client.md §4.2, §9); the receiving logic (dedup,
+      // fragment reassembly and delivery) is up to the application - it
+      // can override this method and plug its own buffers in
+      _replyCopy(packet);
+    }
+  }
+
+  void _replyPong(Magpie packet) {
+    final info = decodePayload(packet.payload);
+    info['time'] = DateTime.now().millisecondsSinceEpoch / 1000.0;
+    sendPacket(packetFactory.pong(
+      encodePayload(info),
+      packet,
+    ));
+  }
+
+  void _replyCopy(Magpie packet) {
+    final request = {
+      'time': DateTime.now().millisecondsSinceEpoch / 1000.0,
+    };
+    sendPacket(packetFactory.copy(
+      encodePayload(request),
+      packet,
+    ));
+  }
+
 }
 
-abstract class BridgePipe implements MagPipe {
+class BridgePipe with PayloadMixIn implements MagPipe {
   BridgePipe(this.connection, {required this.remote, required this.local});
 
   /// The connection this pipe is attached to.
   final BridgeLink connection;
 
-  final int remote;
-  final int local;
+  final int remote;  // contact's bid
+  final int local;   // my bid
 
   final packetFactory = BridgePacketFactory();
-
-  // TODO: processPacket() - dedup by mid = (sn << 32) | index
-  // (received_sn_set), reassemble fragments (receiving_table) with the
-  // T2 cleanup, and dequeue the sending queue on COPY
-  // (docs/client.md §2, §4.2)
 
   @override
   bool sendPacket(Magpie packet) => connection.sendPacket(packet);
@@ -120,9 +142,6 @@ abstract class BridgePipe implements MagPipe {
     int index = 0,
     int count = 1,
   }) {
-    // TODO: sending queue - retransmission (T/R), send window (K),
-    // queue capacity (C) and fragmentation of oversized payloads
-    // (docs/client.md §3)
     final target = remote;
     final source = local;
     if (target == 0 || source == 0) {
@@ -137,6 +156,42 @@ abstract class BridgePipe implements MagPipe {
       count: count,
     );
     return sendPacket(packet);
+  }
+
+  /// Answer "PONG" to the peer's "PING": echo the payload except
+  /// 'time', which is updated to the local clock (docs/client.md §6).
+  @override
+  void processPacket(Packet packet) {
+    if (packet.cmd == 1 && packet.command == Command.PING) {
+      // heartbeat from the peer: answer "PONG" (docs/client.md §6)
+      _replyPong(packet);
+    } else if (packet.ack == 0 && packet.dsn == 1) {
+      // data packet forwarded from a peer (A=0, D=1): answer "COPY" with
+      // sn/index paired (docs/client.md §4.2, §9); the receiving logic
+      // (dedup, fragment reassembly and delivery) is up to the
+      // application - it can override this method and plug its own
+      // buffers in
+      _replyCopy(packet);
+    }
+  }
+
+  void _replyPong(Magpie packet) {
+    final info = decodePayload(packet.payload);
+    info['time'] = DateTime.now().millisecondsSinceEpoch / 1000.0;
+    sendPacket(packetFactory.pong(
+      encodePayload(info),
+      packet,
+    ));
+  }
+
+  void _replyCopy(Magpie packet) {
+    final request = {
+      'time': DateTime.now().millisecondsSinceEpoch / 1000.0,
+    };
+    sendPacket(packetFactory.copy(
+      encodePayload(request),
+      packet,
+    ));
   }
 
 }

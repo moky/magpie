@@ -32,6 +32,8 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:magpie_bridge/protocol.dart';
+
 import 'utils/config.dart';
 import 'utils/enigma.dart';
 
@@ -159,6 +161,27 @@ class MagHub {
       pipe = link.getPipe(target);
     }
     return pipe;
+  }
+
+  /// Send a pre-built packet through the connection registered for
+  /// [remote]: a bridged packet (B=1) is delivered to the peer at
+  /// `packet.target`; a direct packet (B=0) goes to the peer directly.
+  /// The connection is established on demand.
+  ///
+  /// Returns false when that connection is not ready yet, has no pipe
+  /// for [packet.target], or the pipe fails to send.
+  bool sendPacket(Packet packet, {required SocketAddress remote}) {
+    MagPipe? pipe;
+    if (packet.bid == 0) {
+      pipe = getDirectPipe(remote);
+    } else {
+      assert(packet.source != 0 && packet.target != 0, 'bid error: $packet');
+      pipe = getBridgePipe(remote, packet.target);
+    }
+    if (pipe == null) {
+      return false;
+    }
+    return pipe.sendPacket(packet);
   }
 
   /// Send a data payload through the connection registered for [remote].

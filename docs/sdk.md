@@ -508,11 +508,11 @@ class DirectPacketFactory {
 - 依赖：Python >= 3.6；
 - 工程配置：`name='magpie-bridge'`；
 - 根目录：`magpie/sdk-py/`；
-- 代码目录：`magpie/sdk-py/magpie_bridge/protocol/`（协议定义）、`magpie/sdk-py/magpie_bridge/magpie/`（工具类）；
+- 代码目录：`magpie/sdk-py/magpie_bridge/protocol/`（协议定义）、`magpie/sdk-py/magpie_bridge/x.py`（HMAC 工具）、`magpie/sdk-py/magpie_bridge/bridge/`（中继服务器与加解密工具）；
 - Python 版服务器与 Python 版 SDK 共用一个库 `magpie-bridge`。
 
 ### Dart SDK
 
 - 依赖：`sdk: '>=3.0.0 <4.0.0'`；
-- 工程配置：`name: magpie-bridge`；
+- 工程配置：`name: magpie_bridge`；
 - 根目录：`magpie/sdk-dart/`。

@@ -34,7 +34,6 @@ import 'dart:typed_data';
 import 'package:magpie_bridge/magpie.dart';
 import 'package:magpie_bridge/protocol.dart';
 
-import 'utils/coding.dart';
 import 'utils/config.dart';
 import 'utils/enigma.dart';
 
@@ -97,15 +96,20 @@ abstract class BaseLink implements MagLink {
   /// COPY, data and system commands all count).
   DateTime? lastReceivedTime;
 
-  DateTime? get lastActiveTime {
-    final sent = lastSendTime;
-    final received = lastReceivedTime;
-    if (received == null) {
-      return sent;
-    } else if (sent == null) {
-      return received;
+  // protected
+  bool needsHeartbeat(DateTime now) {
+    // idle check: now - max(lastSendTime, lastReceivedTime) > H
+    // (a link that has never received anything still heartbeats on its
+    // last send)
+    final lastSent = lastSendTime;
+    final lastReceived = lastReceivedTime;
+    final lastActive = lastSent == null ? lastReceived
+        : (lastReceived == null || lastSent.isAfter(lastReceived) ? lastSent : lastReceived);
+    if (lastActive == null) {
+      // no traffic yet
+      return false;
     }
-    return sent.isAfter(received) ? sent : received;
+    return now.difference(lastActive).inMilliseconds > config.heartbeatInterval * 1000;
   }
 
   /// Outbound packets deferred while re-handshaking; signed and sent
@@ -182,39 +186,5 @@ abstract class BaseLink implements MagLink {
   Packet? parse(Uint8List data);
 
   void processPacket(Packet packet);
-
-  //
-  //   Payload
-  //
-
-  // protected
-  Map decodePayload(Uint8List payload) {
-    final text = UTF8.decode(payload) ?? '{}';
-    return JSONMap.decode(text) ?? {};
-  }
-
-  // protected
-  Uint8List encodePayload(Map info) {
-    final text = JSONMap.encode(info) ?? '';
-    return UTF8.encode(text);
-  }
-
-  /// Pad the JSON body to at least [ServerConfig.handshakeMinPayload]
-  /// bytes with a 'blah' field (docs/client.md 5.1): the value repeats
-  /// 'blah' separated by spaces, so the padded body may exceed the
-  /// minimum by up to 4 bytes.
-  // protected
-  Uint8List padPayload(Map<Object?, Object?> body) {
-    var json = JSONMap.encode(body) ?? '';
-    var padLen = config.handshakeMinPayload - (json.length + 10);  // + ',"blah":""'
-    if (padLen > 0) {
-      // k words joined by spaces take 5k-1 bytes; round up so the
-      // body never falls below the minimum
-      var words = (padLen + 5) ~/ 5;
-      body['blah'] = List.filled(words, 'blah').join(' ');
-      json = JSONMap.encode(body) ?? json;
-    }
-    return UTF8.encode(json);
-  }
 
 }

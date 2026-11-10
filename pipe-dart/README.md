@@ -28,6 +28,9 @@ connections.
   DATA/COPY), including signed `ReliablePacket` (HMAC-SHA256).
 - **Enigma**: decrypts the handshake secret with HKDF-SHA256 +
   AES-256-GCM (`HkdfEnc` / `HkdfSha256`).
+- **Receiving**: the default `processPacket` answers "COPY" to data
+  packets and "PONG" to heartbeats; override it on your pipe subclass
+  to plug in your own dedup, fragment reassembly and delivery.
 
 See `docs/protocol.md` in the Magpie Bridge repository for the wire
 format and `docs/client.md` for the client behaviour.
@@ -44,6 +47,12 @@ var bridgePipe = hub.getBridgePipe(server, targetBid);
 // direct connection to a peer (B=0):
 var direct = hub.connect(peer);
 var directPipe = hub.getDirectPipe(peer);
+
+// send data through a pipe (sn/index/count for the reliability layer):
+directPipe.sendData(payload, sn: 1);
+
+// or send a pre-built packet (routed by its B flag):
+hub.sendPacket(packet, remote: server);
 
 ...
 hub.disconnect(server);

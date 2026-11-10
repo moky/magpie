@@ -36,6 +36,7 @@ import 'package:magpie_bridge/factory.dart';
 
 import 'utils/coding.dart';
 import 'utils/enigma.dart';
+import 'utils/payload.dart';
 
 import 'link.dart';
 import 'pipe.dart';
@@ -43,7 +44,7 @@ import 'pipe.dart';
 /// Link to the relay server (B=1): handshake waves and system
 /// command handling are implemented; data packets are answered with
 /// "COPY" and handed to the pipe of the source peer.
-class BridgeLink extends BaseLink {
+class BridgeLink extends BaseLink with PayloadMixIn {
   BridgeLink(super.socket, super.remote, {required super.enigma});
 
   /// The bid assigned by the server after the handshake (0 = not yet).
@@ -94,7 +95,7 @@ class BridgeLink extends BaseLink {
     // "SYN?" carries no attachment, even when re-handshaking with a
     // stale secret bound (docs/protocol.md §5.1)
     sendPacket(packetFactory.syn(
-      padPayload(request),
+      padPayload(request, config: config),
       source: 0,
     ), encryptedMode: false);
   }
@@ -155,11 +156,8 @@ class BridgeLink extends BaseLink {
       return;
     }
     now ??= DateTime.now();
-    // idle check: now - max(lastSendTime, lastReceivedTime) > H
-    final last = lastActiveTime;
-    final idle = last == null ? null : now.difference(last);
-    if (idle == null || idle.inMilliseconds < config.heartbeatInterval * 1000) {
-      return;  // no traffic yet, or traffic is recent: no ping needed
+    if (!needsHeartbeat(now)) {
+      return;
     }
     final request = {
       'time': now.millisecondsSinceEpoch / 1000.0,
@@ -224,7 +222,7 @@ class BridgeLink extends BaseLink {
       'time': DateTime.now().millisecondsSinceEpoch / 1000.0,
     };
     final ack = packetFactory.ack(
-      padPayload(request),
+      padPayload(request, config: config),
       source: target,
     );
     _lastAck = ack;
@@ -241,12 +239,15 @@ class BridgeLink extends BaseLink {
   /// Answer "NOOP" to an unexpected "FIN!": refresh the server's
   /// NOOP-immunity window and resume the online state without a new
   /// handshake (docs/workflow.md §3.1); this is not a heartbeat.
-  void _sendNoop() {
+  void _handleFinAck(Magpie packet) {
     final source = bid;
-    if (source == 0) {
+    if (source == 0 || !ready) {
       // not handshake yet
       return;
     }
+    // unexpected "FIN!" (kicked by a forged "FIN?" attack): answer
+    // "NOOP" at once to refresh the immunity window and stay online
+    // (docs/workflow.md §3.1)
     final request = {
       'time': DateTime.now().millisecondsSinceEpoch / 1000.0,
     };
@@ -284,20 +285,6 @@ class BridgeLink extends BaseLink {
     if (ack != null) {
       sendPacket(ack);
     }
-  }
-
-  /// Answer "COPY" to a data packet forwarded from a peer: sn/index are
-  /// paired automatically so the sender's queue can dequeue
-  /// (docs/client.md §4.2, §9). While re-handshaking, the packet is
-  /// deferred and sent once [ready].
-  void _replyCopy(Magpie packet) {
-    final request = {
-      'time': DateTime.now().millisecondsSinceEpoch / 1000.0,
-    };
-    sendPacket(packetFactory.copy(
-      encodePayload(request),
-      packet,
-    ));
   }
 
   /// Accept data from the bids in [sources]: add bridge permits
@@ -367,10 +354,14 @@ class BridgeLink extends BaseLink {
 
   /// The strictly ordered star marker `[1, 2, 3]`: "ACPT *" / "DENY *"
   /// (docs/protocol.md §6.2).
-  bool _isStar(List<int> sources) {
-    return sources.length == 3 &&
-        sources[0] == 1 && sources[1] == 2 && sources[2] == 3;
-  }
+  bool _isStar(List<int> sources) => sources.length == PERMIT_ALL.length
+      && sources[0] == PERMIT_ALL[0]
+      && sources[1] == PERMIT_ALL[1]
+      && sources[2] == PERMIT_ALL[2];
+
+  /// wildcard
+  // ignore: non_constant_identifier_names
+  static final List<int> PERMIT_ALL = [1, 2, 3];
 
   /// Build a pipe for the peer [remote] bound to this connection: the
   /// application must plug a custom [PipeFactory] via [PipeExtensions].
@@ -422,24 +413,13 @@ class BridgeLink extends BaseLink {
         _handleSynAck(packet);
         return;
       case Command.FIN_ACK:
-        // unexpected "FIN!" (kicked by a forged "FIN?" attack): answer
-        // "NOOP" at once to refresh the immunity window and stay online
-        // (docs/workflow.md §3.1)
-        if (bid != 0 && ready) {
-          _sendNoop();
-        }
+        _handleFinAck(packet);
         return;
       case Command.FAIL:
         // "connection unconfirmed": resend the last "ACK!" (idempotent);
         // everything else is routed to the pipe for the upper layer
         _handleFail(packet);
         break;
-    }
-    // data packet forwarded from a peer (A=0, D=1): answer "COPY" with
-    // sn/index paired so the sender's queue can dequeue (docs/client.md
-    // §4.2, §9)
-    if (packet.ack == 0 && packet.bid == 1 && packet.sn != 0) {
-      _replyCopy(packet);
     }
     // hand FAIL/DONE/DATA/COPY/PONG to the pipe: dequeue the sending
     // queue on COPY, fail it on FAIL, merge fragments on DATA, measure
@@ -472,11 +452,11 @@ class BridgeLink extends BaseLink {
     if (!ready) {
       return false;
     }
-    final received = lastReceivedTime;
-    if (received == null) {
+    final lastReceived = lastReceivedTime;
+    if (lastReceived == null) {
       return false;
     }
-    return DateTime.now().difference(received) >=
+    return DateTime.now().difference(lastReceived) >=
         Duration(seconds: config.recordActiveTimeout.round());
   }
 
