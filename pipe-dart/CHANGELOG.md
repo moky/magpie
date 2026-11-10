@@ -1,14 +1,26 @@
+## 0.3.2
+
+- `MagHub`: `getDirectPipe` / `getBridgePipe` / `sendPacket`, plus
+  `keepAlive(now)` - heartbeats idle links and re-connects dead ones
+  (app-driven schedule, no timers inside the hub).
+- Default `processPacket`: answers "COPY" to data packets and "PONG"
+  to heartbeats.
+- `MagPipeDelegate`: receives every packet forwarded through the
+  pipes; plug it via `PipeFactory.pipeDelegate` - read at dispatch
+  time, so setting/clearing it affects all pipes at once.
+- `PipeFactory`: now a concrete class with default `createXxx`
+  implementations - apps without custom pipes just register an
+  instance via `sharedPipeExtensions.pipeFactory`; custom factories
+  extend it (was `implements`).
+- Example: `ChatPipe` forwards to the base `processPacket` so data
+  packets are answered "COPY" (docs/client.md §4.2).
+
 ## 0.3.1
 
 - `HkdfEnc`: encryption context of the encrypted handshake - info/aad
   follow pre-agreed formulas derived from the bid (never transmitted).
 - `HkdfCipher` / `HkdfSha256`: pluggable HKDF-SHA256 + AES-256-GCM.
 - `Enigma.encryptSecret` / `decryptSecret` reworked around `HkdfEnc`.
-- `MagHub`: `getDirectPipe` / `getBridgePipe` / `sendPacket`, plus a
-  run loop that heartbeats idle links and re-connects dead ones
-  (no packet received for `record_active_timeout`).
-- Default `processPacket`: answers "COPY" to data packets and "PONG"
-  to heartbeats.
 
 ## 0.3.0
 

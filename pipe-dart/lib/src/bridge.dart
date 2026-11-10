@@ -166,7 +166,6 @@ class BridgeLink extends BaseLink with PayloadMixIn {
       encodePayload(request),
       source: source,
     ));
-    // lastSendTime is refreshed by send()
   }
 
   /// Handle the "SYN!" reply (docs/client.md 5.1/5.2): save the assigned
@@ -255,7 +254,6 @@ class BridgeLink extends BaseLink with PayloadMixIn {
       encodePayload(request),
       source: source,
     ));
-    // lastSendTime is refreshed by send()
   }
 
   /// Handle the "FAIL" reply (docs/client.md §4.3), identified by the

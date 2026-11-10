@@ -17,6 +17,6 @@ export 'src/utils/hmac.dart';                  // registerHmacSha256
 
 export 'src/link.dart';                        // MagLink / BaseLink
 export 'src/hub.dart';                         // MagHub
-export 'src/pipe.dart';                        // MagPipe / DirectPipe / BridgePipe
+export 'src/pipe.dart';                        // MagPipe / PipeFactory / MagPipeDelegate
 export 'src/bridge.dart';                      // BridgeLink
 export 'src/direct.dart';                      // DirectLink

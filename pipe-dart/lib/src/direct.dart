@@ -99,7 +99,6 @@ class DirectLink extends BaseLink with PayloadMixIn {
     sendPacket(packetFactory.ping(
       encodePayload(request),
     ));
-    // lastSendTime is refreshed by sendPacket()
   }
 
   /// Respond to the peer's "SYN?": reply "SYN!" (responder side of the

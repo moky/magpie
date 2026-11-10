@@ -17,9 +17,10 @@ Magpie Bridge pipe transport for Dart: one shared UDP socket, many
 connections.
 
 - **MagHub**: binds the shared socket once and multiplexes every connection
-  registered on it (inbound datagrams are routed by remote endpoint), with
-  a run loop that heartbeats idle links and re-connects dead ones
-  (docs/client.md §6, §8).
+  registered on it (inbound datagrams are routed by remote endpoint). The
+  hub runs no timers: call `hub.keepAlive(now)` periodically (e.g. once a
+  second on your own timer) to heartbeat idle links and re-connect dead
+  ones (docs/client.md §6, §8).
 - **BridgeLink / DirectLink**: connection to the relay
   server (B=1, with the SYN?/SYN!/ACK! handshake, heartbeat and enigma)
   or directly to a peer (B=0, stateless).
@@ -31,6 +32,10 @@ connections.
 - **Receiving**: the default `processPacket` answers "COPY" to data
   packets and "PONG" to heartbeats; override it on your pipe subclass
   to plug in your own dedup, fragment reassembly and delivery.
+- **Observing**: a `MagPipeDelegate` receives every packet forwarded
+  through the pipes - set it on the registered `PipeFactory`
+  (`pipeDelegate`) without subclassing anything, or override the
+  `delegate` getter on your pipe subclass for a per-pipe observer.
 
 See `docs/protocol.md` in the Magpie Bridge repository for the wire
 format and `docs/client.md` for the client behaviour.
@@ -39,6 +44,9 @@ format and `docs/client.md` for the client behaviour.
 
 ```dart
 var hub = await MagHub.create();
+
+// pipes are built by the registered factory (required):
+sharedPipeExtensions.pipeFactory = PipeFactory();
 
 // bridge connection to the relay server (B=1):
 var bridge = hub.connectBridge(server);
@@ -53,6 +61,9 @@ directPipe.sendData(payload, sn: 1);
 
 // or send a pre-built packet (routed by its B flag):
 hub.sendPacket(packet, remote: server);
+
+// keep-alive pass: call periodically, e.g. once a second
+hub.keepAlive(DateTime.now());
 
 ...
 hub.disconnect(server);

@@ -18,26 +18,24 @@ class ChatPipe extends BridgePipe {
   ChatPipe(super.connection, {required super.remote, required super.local});
 
   @override
-  void processPacket(Magpie packet) {
-    // a message from the peer (A=0, D=1): print the payload (the "COPY"
-    // reply is answered by the connection itself, see docs/client.md §4.2)
-    final p = packet as Packet;
-    if (p.ack == 0 && p.sn != 0) {
-      print('<< ${utf8.decode(p.payload, allowMalformed: true)}');
+  void processPacket(Packet packet) {
+    // answer "COPY" first, then observe via the factory's delegate
+    // (docs/client.md §4.2)
+    super.processPacket(packet);
+    // a message from the peer (A=0, D=1): print the payload
+    if (packet.ack == 0 && packet.sn != 0) {
+      print('<< ${utf8.decode(packet.payload, allowMalformed: true)}');
     }
   }
 }
 
 /// the app's pipe factory: plugged into the shared PipeExtensions hook
-class ChatPipeFactory implements PipeFactory {
+class ChatPipeFactory extends PipeFactory {
   @override
   BridgePipe createBridgePipe(BridgeLink conn, {
     required int remote,
     required int local,
   }) => ChatPipe(conn, remote: remote, local: local);
-
-  @override
-  DirectPipe createDirectPipe(DirectLink conn) => throw UnimplementedError();
 }
 
 Future<void> main() async {

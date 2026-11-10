@@ -60,6 +60,18 @@ abstract interface class MagPipe {
 
 }
 
+/// Receives every packet forwarded by the pipe: self-contained packets
+/// (ext == 0) and fragments of fragmented messages (ext > 0) alike.
+/// The application decides how to process them (docs/client.md §4.2).
+///
+/// Plug the app's observer via `PipeFactory.pipeDelegate`.
+abstract class MagPipeDelegate {
+
+  /// Handle one packet forwarded by the pipe.
+  void onPacket(Packet packet, MagPipe pipe);
+
+}
+
 class DirectPipe with PayloadMixIn implements MagPipe {
   DirectPipe(this.connection);
 
@@ -85,8 +97,21 @@ class DirectPipe with PayloadMixIn implements MagPipe {
     return sendPacket(packet);
   }
 
+  /// The delegate observing every packet forwarded through this pipe:
+  /// read from the registered factory (`PipeFactory.pipeDelegate`), so
+  /// setting/clearing it affects all pipes at once. Subclasses may
+  /// override this getter for a per-pipe observer.
+  MagPipeDelegate? get delegate =>
+      sharedPipeExtensions.pipeFactory?.pipeDelegate;
+
   /// Answer "PONG" to the peer's "PING": echo the payload except
   /// 'time', which is updated to the local clock (docs/client.md §6).
+  /// Data packets (A=0, D=1) are answered "COPY" with sn/index paired
+  /// (docs/client.md §4.2, §9).
+  ///
+  /// Every packet also goes to the delegate: the application observes
+  /// the full conversation and handles the payload itself (fragment
+  /// reassembly is up to the app).
   @override
   void processPacket(Packet packet) {
     if (packet.cmd == 1 && packet.command == Command.PING) {
@@ -94,11 +119,10 @@ class DirectPipe with PayloadMixIn implements MagPipe {
       _replyPong(packet);
     } else if (packet.ack == 0 && packet.dsn == 1) {
       // data packet from the peer (A=0, D=1): answer "COPY" with sn/index
-      // paired (docs/client.md §4.2, §9); the receiving logic (dedup,
-      // fragment reassembly and delivery) is up to the application - it
-      // can override this method and plug its own buffers in
+      // paired (docs/client.md §4.2, §9)
       _replyCopy(packet);
     }
+    delegate?.onPacket(packet, this);
   }
 
   void _replyPong(Magpie packet) {
@@ -158,8 +182,21 @@ class BridgePipe with PayloadMixIn implements MagPipe {
     return sendPacket(packet);
   }
 
+  /// The delegate observing every packet forwarded through this pipe:
+  /// read from the registered factory (`PipeFactory.pipeDelegate`), so
+  /// setting/clearing it affects all pipes at once. Subclasses may
+  /// override this getter for a per-pipe observer.
+  MagPipeDelegate? get delegate =>
+      sharedPipeExtensions.pipeFactory?.pipeDelegate;
+
   /// Answer "PONG" to the peer's "PING": echo the payload except
   /// 'time', which is updated to the local clock (docs/client.md §6).
+  /// Data packets forwarded from a peer (A=0, D=1) are answered "COPY"
+  /// with sn/index paired (docs/client.md §4.2, §9).
+  ///
+  /// Every packet also goes to the delegate: the application observes
+  /// the full conversation and handles the payload itself (fragment
+  /// reassembly is up to the app).
   @override
   void processPacket(Packet packet) {
     if (packet.cmd == 1 && packet.command == Command.PING) {
@@ -167,12 +204,10 @@ class BridgePipe with PayloadMixIn implements MagPipe {
       _replyPong(packet);
     } else if (packet.ack == 0 && packet.dsn == 1) {
       // data packet forwarded from a peer (A=0, D=1): answer "COPY" with
-      // sn/index paired (docs/client.md §4.2, §9); the receiving logic
-      // (dedup, fragment reassembly and delivery) is up to the
-      // application - it can override this method and plug its own
-      // buffers in
+      // sn/index paired (docs/client.md §4.2, §9)
       _replyCopy(packet);
     }
+    delegate?.onPacket(packet, this);
   }
 
   void _replyPong(Magpie packet) {
@@ -200,14 +235,24 @@ class BridgePipe with PayloadMixIn implements MagPipe {
 //  Factory
 //
 
-abstract interface class PipeFactory {
+/// Factory: builds pipes and wires the app's observer.
+///
+/// The default implementations build plain pipes; applications with
+/// special needs extend this class and override `createXxx`.
+class PipeFactory {
+  PipeFactory([this.pipeDelegate]);
 
-  DirectPipe createDirectPipe(DirectLink conn);
+  /// The delegate observing every pipe created by this factory: read
+  /// at dispatch time, so setting/clearing it affects all pipes at
+  /// once (null = no observation).
+  MagPipeDelegate? pipeDelegate;
+
+  DirectPipe createDirectPipe(DirectLink conn) => DirectPipe(conn);
 
   BridgePipe createBridgePipe(BridgeLink conn, {
     required int remote,
     required int local,
-  });
+  }) => BridgePipe(conn, remote: remote, local: local);
 
 }
 

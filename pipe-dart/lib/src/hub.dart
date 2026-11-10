@@ -28,7 +28,6 @@
  * SOFTWARE.
  * ==============================================================================
  */
-import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -45,12 +44,14 @@ import 'pipe.dart';
 /// UDP hub: binds one shared socket and multiplexes every [MagLink]
 /// registered on it.
 ///
-/// A run loop scans all links on schedule: links idle for longer than
-/// `Config.heartbeatInterval` trigger a heartbeat by themselves.
+/// The hub runs no timers: call [MagHub.keepAlive] periodically from
+/// your own timer/scheduler (e.g. once a second) - it heartbeats idle
+/// links and re-connects the dead ones.
 ///
 /// Usage:
 /// ```
 /// var hub = await MagHub.create();
+/// sharedPipeExtensions.pipeFactory = PipeFactory();
 /// var bridge = hub.connectBridge(server);  // bridge connection (B=1)
 /// var direct = hub.connect(peer);          // direct connection (B=0)
 /// ...
@@ -63,8 +64,6 @@ class MagHub {
   MagHub._(this.socket) {
     // pump the shared socket: route each datagram to its connection
     socket.listen(_onEvent);
-    // the run loop: heartbeat idle links on schedule
-    _timer = Timer.periodic(_scanInterval, (_) => _scan(DateTime.now()));
   }
 
   /// Create the hub: bind the shared UDP socket on [host]:[port]
@@ -85,14 +84,6 @@ class MagHub {
   /// The enigma shared by this hub's bridge links: its key table feeds
   /// the encrypted handshake; the app loads it via `updateSecrets`.
   final Enigma enigma = Enigma();
-
-  /// The run loop timer (cancelled when the socket is closed).
-  Timer? _timer;
-
-  /// How often the run loop scans the links: the heartbeat itself is
-  /// idle-triggered (H = `Config.heartbeatInterval`), so a fine scan
-  /// only adds responsiveness, no extra traffic.
-  static const _scanInterval = Duration(seconds: 1);
 
   /// Register a direct link to the peer endpoint [remote] (B=0).
   /// Returns the existing link when that endpoint is already
@@ -216,7 +207,7 @@ class MagHub {
   /// received nothing for D = `record_active_timeout` are re-connected
   /// (the server record is likely gone, docs/client.md §8); the rest
   /// heartbeat by themselves when idle.
-  void _scan(DateTime now) {
+  void keepAlive(DateTime now) {
     for (var link in bridgeLinks.values) {
       if (link.disconnected) {
         link.reconnect(now);
@@ -232,12 +223,6 @@ class MagHub {
   /// Route each incoming datagram to the connection matching the sender's
   /// endpoint; datagrams from unregistered endpoints are dropped silently.
   void _onEvent(RawSocketEvent event) {
-    if (event == RawSocketEvent.closed) {
-      // the socket is gone: stop the run loop
-      _timer?.cancel();
-      _timer = null;
-      return;
-    }
     if (event != RawSocketEvent.read) {
       return;
     }

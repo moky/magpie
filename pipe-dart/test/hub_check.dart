@@ -33,7 +33,18 @@ class TestPipe extends DirectPipe {
   TestPipe(super.connection);
 
   @override
-  void processPacket(Magpie packet) {}
+  void processPacket(Packet packet) {
+    // forward to the base: answer COPY/PONG and observe via the
+    // registered pipe delegate
+    super.processPacket(packet);
+  }
+}
+
+/// records packets observed through the pipe delegate
+class PipeRecorder implements MagPipeDelegate {
+  int calls = 0;
+  @override
+  void onPacket(Packet packet, MagPipe pipe) => calls++;
 }
 
 /// concrete bridge pipe for the test
@@ -41,11 +52,11 @@ class TestBridgePipe extends BridgePipe {
   TestBridgePipe(super.connection, {required super.remote, required super.local});
 
   @override
-  void processPacket(Magpie packet) {}
+  void processPacket(Packet packet) {}
 }
 
 /// test-only factory: creates the concrete pipes for the hub check
-class TestPipeFactory implements PipeFactory {
+class TestPipeFactory extends PipeFactory {
   @override
   DirectPipe createDirectPipe(DirectLink conn) => TestPipe(conn);
 
@@ -58,7 +69,8 @@ class TestPipeFactory implements PipeFactory {
 
 Future<void> main() async {
   registerHmacSha256();
-  sharedPipeExtensions.pipeFactory = TestPipeFactory();
+  var factory = TestPipeFactory();
+  sharedPipeExtensions.pipeFactory = factory;
 
   // fake remote peers
   final server = await RawDatagramSocket.bind('127.0.0.1', 0);
@@ -130,6 +142,15 @@ Future<void> main() async {
   await Future.delayed(const Duration(milliseconds: 200));
   check(hub.directLinks.length == 1, '8: unknown endpoint ignored');
   stranger.close();
+
+  // 9. pipe delegate observes the forwarded DATA packet
+  var recorder = PipeRecorder();
+  factory.pipeDelegate = recorder;
+  var probe = DirectPacketFactory().data(Uint8List.fromList([7, 8, 9]), sn: 9);
+  peer.send(probe.pack(), hub.socket.address, hub.socket.port);
+  await Future.delayed(const Duration(milliseconds: 200));
+  check(recorder.calls == 1, '9: pipe delegate observed the packet');
+  factory.pipeDelegate = null;
 
   server.close();
   peer.close();
