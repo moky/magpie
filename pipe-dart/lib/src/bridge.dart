@@ -300,6 +300,7 @@ class BridgeLink extends BaseLink with PayloadMixIn {
       return;
     }
     for (var remote in sources) {
+      assert(remote != 0 && remote != bid, 'accept error bid: $remote');
       final pipe = _newPipe(remote);
       if (pipe == null) {
         // no pipe factory registered
@@ -325,6 +326,7 @@ class BridgeLink extends BaseLink with PayloadMixIn {
       return;
     }
     for (var remote in sources) {
+      assert(remote != 0 && remote != bid, 'deny error bid: $remote');
       _bridgePipes.remove(remote);
     }
   }

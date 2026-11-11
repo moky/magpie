@@ -44,7 +44,7 @@ class TestPipe extends DirectPipe {
 class PipeRecorder implements MagPipeDelegate {
   int calls = 0;
   @override
-  void onPacket(Packet packet, MagPipe pipe) => calls++;
+  void onPacketReceived(Packet packet, MagPipe pipe) => calls++;
 }
 
 /// concrete bridge pipe for the test
@@ -108,10 +108,15 @@ Future<void> main() async {
   // the "SYN?" of the direct handshake is expected traffic: drain it
   await receive(peer, const Duration(milliseconds: 500));
 
-  // 5a. sendData: unknown endpoint auto-connects, but the bridge link
-  // is not ready yet -> false
-  check(!hub.sendData(Uint8List.fromList([1]), remote: (host: InternetAddress.loopbackIPv4, port: 1), target: 1, sn: 1),
-      '5a: unknown endpoint -> false');
+  // 5a. sendData on a pre-ready bridge link: the bridge pipe cannot
+  // exist yet (no bid), so the call trips the assert in debug builds
+  var asserted = false;
+  try {
+    hub.sendData(Uint8List.fromList([1]), remote: (host: InternetAddress.loopbackIPv4, port: 1), target: 1, sn: 1);
+  } on AssertionError {
+    asserted = true;
+  }
+  check(asserted, '5a: pre-ready bridge send trips the assert');
 
   // 5b. sendData: connection not ready -> false
   check(!hub.sendData(Uint8List.fromList([1]), remote: (host: peer.address, port: peer.port), target: 0, sn: 1),

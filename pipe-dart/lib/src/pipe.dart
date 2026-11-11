@@ -67,8 +67,8 @@ abstract interface class MagPipe {
 /// Plug the app's observer via `PipeFactory.pipeDelegate`.
 abstract class MagPipeDelegate {
 
-  /// Handle one packet forwarded by the pipe.
-  void onPacket(Packet packet, MagPipe pipe);
+  /// Handle one packet received through the pipe.
+  void onPacketReceived(Packet packet, MagPipe pipe);
 
 }
 
@@ -122,7 +122,7 @@ class DirectPipe with PayloadMixIn implements MagPipe {
       // paired (docs/client.md §4.2, §9)
       _replyCopy(packet);
     }
-    delegate?.onPacket(packet, this);
+    delegate?.onPacketReceived(packet, this);
   }
 
   void _replyPong(Magpie packet) {
@@ -207,7 +207,7 @@ class BridgePipe with PayloadMixIn implements MagPipe {
       // sn/index paired (docs/client.md §4.2, §9)
       _replyCopy(packet);
     }
-    delegate?.onPacket(packet, this);
+    delegate?.onPacketReceived(packet, this);
   }
 
   void _replyPong(Magpie packet) {

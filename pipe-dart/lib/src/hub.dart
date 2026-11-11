@@ -159,8 +159,12 @@ class MagHub {
   /// `packet.target`; a direct packet (B=0) goes to the peer directly.
   /// The connection is established on demand.
   ///
-  /// Returns false when that connection is not ready yet, has no pipe
-  /// for [packet.target], or the pipe fails to send.
+  /// The bridge connection must be ready (`link.ready`): a pre-ready
+  /// call trips the assert in debug builds and returns false in
+  /// release (the packet is lost); the direct connection defers the
+  /// packet until the handshake completes. Returns false also when
+  /// the connection has no pipe for [packet.target], or the pipe
+  /// fails to send.
   bool sendPacket(Packet packet, {required SocketAddress remote}) {
     MagPipe? pipe;
     if (packet.bid == 0) {
@@ -170,6 +174,7 @@ class MagHub {
       pipe = getBridgePipe(remote, packet.target);
     }
     if (pipe == null) {
+      assert(false, 'failed to get pipe: $remote');
       return false;
     }
     return pipe.sendPacket(packet);
@@ -182,8 +187,11 @@ class MagHub {
   /// sends it via the direct link (no bid on the wire). The connection
   /// is established on demand.
   ///
-  /// Returns false when that connection is not ready yet, has no pipe
-  /// for [target], or the pipe fails to send.
+  /// Returns false when the pipe fails to send. The bridge connection
+  /// must be ready (`link.ready`): a pre-ready call trips the assert
+  /// in debug builds and returns false in release (the packet is
+  /// lost); the direct connection defers the packet until the
+  /// handshake completes.
   bool sendData(Uint8List payload, {
     required SocketAddress remote,
     required int target,
@@ -198,6 +206,7 @@ class MagHub {
       pipe = getBridgePipe(remote, target);
     }
     if (pipe == null) {
+      assert(false, 'failed to get pipe: $remote');
       return false;
     }
     return pipe.sendData(payload, sn: sn, index: index, count: count);

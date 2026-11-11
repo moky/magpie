@@ -50,6 +50,8 @@ sharedPipeExtensions.pipeFactory = PipeFactory();
 
 // bridge connection to the relay server (B=1):
 var bridge = hub.connectBridge(server);
+// the handshake runs in the background: getBridgePipe returns null
+// until it completes (bridge.ready)
 var bridgePipe = hub.getBridgePipe(server, targetBid);
 
 // direct connection to a peer (B=0):
