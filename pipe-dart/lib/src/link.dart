@@ -47,7 +47,7 @@ abstract interface class MagLink {
 
   void disconnect([DateTime? now]);
 
-  void heartbeat([DateTime? now]);
+  void heartbeat(DateTime now);
 
   /// Called when received raw bytes from the peer.
   void received(Uint8List data);
@@ -85,6 +85,10 @@ abstract class BaseLink implements MagLink {
   @override
   bool ready = false;
 
+  /// Whether [disconnect] was called (intentional close): the run loop
+  /// never re-dials a closed link. Cleared by [connect] on re-open.
+  bool closed = false;
+
   /// The configuration (handshake parameters, etc.); the app loads
   /// values via `config.update({...})`.
   final Config config = Config();
@@ -106,8 +110,19 @@ abstract class BaseLink implements MagLink {
   /// COPY, data and system commands all count).
   DateTime? lastReceivedTime;
 
+  /// Whether the link has been idle long enough for a heartbeat (H =
+  /// [Config.heartbeatInterval], docs/client.md §6): neither direction
+  /// has seen traffic for longer than H.
+  ///
+  /// Returns false when the handshake is unfinished (the run loop
+  /// reconnects instead), or when nothing has ever been sent on this
+  /// link (nothing to keep alive yet).
   // protected
   bool needsHeartbeat(DateTime now) {
+    if (!ready) {
+      // handshake unfinished, or disconnected
+      return false;
+    }
     // idle check: now - max(lastSendTime, lastReceivedTime) > H
     // (a link that has never received anything still heartbeats on its
     // last send)
@@ -122,6 +137,49 @@ abstract class BaseLink implements MagLink {
     return now.difference(lastActive).inMilliseconds > config.heartbeatInterval * 1000;
   }
 
+  /// Whether the manager should re-connect this link on this tick
+  /// (docs/client.md §6, §8):
+  ///
+  ///   * ready link - only when the session has gone silent
+  ///     ([isSessionStale], overridden by each link type);
+  ///   * not-ready link - the handshake is stuck: the last "SYN?" went
+  ///     out at least [Config.handshakeInterval] ago (the rate limit),
+  ///     so re-send one - the first datagram may have been lost; true
+  ///     at once when nothing has been sent yet.
+  // protected
+  bool needsReconnect(DateTime now) {
+    if (ready) {
+      return isSessionStale(now);
+    }
+    return isHandshakeStuck(now);
+  }
+
+  /// Whether the handshake needs a fresh "SYN?" (docs/workflow.md §2.3):
+  /// true when nothing has been sent yet (dial now), or when the last
+  /// "SYN?" went out at least [Config.handshakeInterval] ago - at most
+  /// one "SYN?" per handshake interval.
+  // protected
+  bool isHandshakeStuck(DateTime now) {
+    if (closed) {
+      // intentionally closed: the run loop never re-dials
+      return false;
+    }
+    final lastSent = lastSendTime;
+    if (lastSent == null) {
+      // nothing sent yet: dial now
+      return true;
+    }
+    // rate limit: at most one "SYN?" per handshake interval
+    return now.difference(lastSent).inMilliseconds >=
+        config.handshakeInterval * 1000;
+  }
+
+  /// Whether an established session has gone silent: the run loop
+  /// re-connects when this is true. Each link type answers in its own
+  /// terms - see the implementations in the subclasses.
+  // protected
+  bool isSessionStale(DateTime now);
+
   /// Outbound packets deferred while re-handshaking; signed and sent
   /// once the handshake completes.
   final List<Magpie> _pendingPackets = [];
@@ -135,11 +193,14 @@ abstract class BaseLink implements MagLink {
     final deferred = List.of(_pendingPackets);
     _pendingPackets.clear();
     for (var packet in deferred) {
-      _send(packet);
+      packAndSend(packet);
     }
   }
 
-  bool _send(Magpie packet) {
+  /// Pack and send the datagram as-is: no signing, no deferral - the
+  /// exact bytes a previous sendPacket would have put on the wire.
+  // protected
+  bool packAndSend(Magpie packet) {
     final data = packet.pack();
     final size = socket.send(data, host, port);
     if (size != data.length) {
@@ -176,14 +237,14 @@ abstract class BaseLink implements MagLink {
       case Command.FIN:
       case Command.FIN_ACK:
       case Command.NOOP:
-        return _send(packet);
+        return packAndSend(packet);
     }
     // ACPT, DENY
     // DATA, COPY
     // PING, PONG
     // ...
     if (ready) {
-      return _send(packet);
+      return packAndSend(packet);
     } else if (command != Command.PING && command != Command.PONG) {
       // waiting for handshake (bounded: keep the newest packets)
       if (_pendingPackets.length >= maxPendingPackets) {

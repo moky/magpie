@@ -57,9 +57,10 @@ Future<void> main() async {
 
   // A: idle for 11s -> PING sent, signed
   conn.ready = true;  // the record survived the wave
-  conn.lastSendTime = DateTime.now().subtract(const Duration(seconds: 11));
+  final now = DateTime.now();
+  conn.lastSendTime = now.subtract(const Duration(seconds: 11));
   conn.lastReceivedTime = null;
-  conn.heartbeat();
+  if (conn.needsHeartbeat(now)) conn.heartbeat(now);
   dg = await receive(server, const Duration(seconds: 1));
   check(dg != null, 'A: idle -> PING sent');
   final packet = BridgePacketFactory().parse(dg!.data);
@@ -73,13 +74,13 @@ Future<void> main() async {
 
   // B: recent send -> no ping
   conn.lastSendTime = DateTime.now();
-  conn.heartbeat();
+  if (conn.needsHeartbeat(DateTime.now())) conn.heartbeat(DateTime.now());
   dg = await receive(server, const Duration(milliseconds: 300));
   check(dg == null, 'B: recent traffic -> no PING');
 
   // C: fresh connection (no timestamps) -> no ping
   var fresh = BridgeLink(client, (host: server.address, port: server.port), enigma: Enigma());
-  fresh.heartbeat();
+  if (fresh.needsHeartbeat(DateTime.now())) fresh.heartbeat(DateTime.now());
   dg = await receive(server, const Duration(milliseconds: 300));
   check(dg == null, 'C: no traffic yet -> no PING');
 
@@ -91,7 +92,7 @@ Future<void> main() async {
   check(fromServer != null, 'D: PONG delivered');
   conn.received(fromServer!.data);
   check(conn.lastReceivedTime != null, 'D: lastReceivedTime refreshed');
-  conn.heartbeat();
+  if (conn.needsHeartbeat(DateTime.now())) conn.heartbeat(DateTime.now());
   dg = await receive(server, const Duration(milliseconds: 300));
   check(dg == null, 'D: PONG suppresses heartbeat');
 

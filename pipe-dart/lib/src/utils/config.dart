@@ -69,6 +69,16 @@ class Config {
   /// than this; LANs without NAT may raise it to 60 seconds.
   double get heartbeatInterval => getDouble('heartbeat_interval', 10.0);
 
+  /// The handshake retry interval in seconds (docs/workflow.md §2.3):
+  /// while the handshake is unfinished, re-send the "SYN?" at most once
+  /// per this; must be shorter than [heartbeatInterval].
+  double get handshakeInterval => getDouble('handshake_interval', 3.0);
+
+  /// Max "SYN?" retries before giving up (docs/workflow.md §2.3): the
+  /// link goes quiet afterwards and stays not-ready; the app decides
+  /// whether to drop it.
+  int get handshakeRetryLimit => getInt('handshake_retry_limit', 5);
+
   /// The record active timeout D in seconds (docs/client.md §6, §8):
   /// when no packet has been received for longer than this, the server
   /// record is likely gone - clean up the pipes and re-handshake;

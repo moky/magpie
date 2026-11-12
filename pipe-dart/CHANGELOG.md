@@ -1,3 +1,14 @@
+## 0.3.4
+
+- `keepAlive(now)` reworked: re-connects stuck handshakes (rate-limited
+  "SYN?" retries - one per `handshake_interval`, up to
+  `handshake_retry_limit`) and stale bridge sessions (nothing received
+  for `record_active_timeout`), else heartbeats idle links.
+- `closed` flag: `disconnect()` marks the link intentionally closed -
+  the run loop stops re-dialing; `connect()` clears it on re-open.
+- Breaking: `heartbeat(now)` / `reconnect(now)` take the tick
+  timestamp - the idle checks moved into the `needsXxx` predicates.
+
 ## 0.3.3
 
 - `MagPipeDelegate`: receives every packet forwarded through the

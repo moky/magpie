@@ -66,11 +66,16 @@ class DirectLink extends BaseLink with PayloadMixIn {
 
   DirectPipe? _directPipe;
 
+  /// "SYN?" retries sent since the dial began (reset when the handshake
+  /// completes).
+  int _connectAttempts = 0;
+
   /// Initiator side: send a "SYN?" to start the three-way handshake
   /// (docs/workflow.md §2.3). Both sides may call [connect] - the
   /// simultaneous open converges.
   @override
   void connect([DateTime? now]) {
+    closed = false;  // (re-)open: re-grant the retry budget
     now ??= DateTime.now();
     final request = {
       'time': now.millisecondsSinceEpoch / 1000.0,
@@ -88,6 +93,7 @@ class DirectLink extends BaseLink with PayloadMixIn {
   @override
   void disconnect([DateTime? now]) {
     ready = false;
+    closed = true;  // intentional close: the run loop stops re-dialing
     now ??= DateTime.now();
     final request = {
       'time': now.millisecondsSinceEpoch / 1000.0,
@@ -97,21 +103,39 @@ class DirectLink extends BaseLink with PayloadMixIn {
     ));
   }
 
-  /// Idle-triggered heartbeat (docs/client.md §6): when no datagram has
-  /// been sent or received for [Config.heartbeatInterval], send a "PING"
-  /// with the payload `{"time": ...}`. Direct packets carry no
-  /// attachment (no shared secret).
+  /// Re-send the "SYN?" while the handshake is unfinished (docs/workflow.md
+  /// §2.3): the run loop calls this instead of [heartbeat] while
+  /// [needsReconnect] is true (UDP may lose the first datagram).
+  ///
+  /// The rate limit itself lives in [needsReconnect]; this only caps the
+  /// attempt count at [Config.handshakeRetryLimit] - past it the link
+  /// goes quiet and the app decides whether to drop it.
+  void reconnect(DateTime now) {
+    if (_connectAttempts >= config.handshakeRetryLimit) {
+      // give up: keep quiet, the upper layer decides
+      return;
+    }
+    // count this dial before sending
+    _connectAttempts += 1;
+    connect(now);
+  }
+
+  /// A direct link holds no server record that could go stale: once
+  /// handshook, the run loop heartbeats and a dead peer is the app
+  /// layer's call.
   @override
-  void heartbeat([DateTime? now]) {
-    if (!ready) {
-      // closed
-      return;
-    }
-    now ??= DateTime.now();
-    if (!needsHeartbeat(now)) {
-      return;
-    }
+  bool isSessionStale(DateTime now) => false;
+
+  /// Idle-triggered heartbeat (docs/client.md §6): send a "PING" with
+  /// the payload `{"time": ...}`. Always sends - gate the call with
+  /// [needsHeartbeat] the way [MagHub.keepAlive] does.
+  ///
+  /// Direct packets carry no attachment (no shared secret); PONGs are
+  /// neither awaited nor retransmitted.
+  @override
+  void heartbeat(DateTime now) {
     final request = {
+      'start_time': DateTime.now().millisecondsSinceEpoch / 1000.0, // for speed
       'time': now.millisecondsSinceEpoch / 1000.0,
     };
     sendPacket(packetFactory.ping(
@@ -153,6 +177,7 @@ class DirectLink extends BaseLink with PayloadMixIn {
       encodePayload(response),
     ));
     ready = true;
+    _connectAttempts = 0;  // handshake complete: retry counter resets
 
     // flush the packets the app fired before the handshake completed
     drain();
@@ -161,6 +186,7 @@ class DirectLink extends BaseLink with PayloadMixIn {
   /// The peer's "ACK!" received (responder side): handshake complete.
   void _handleAck(Magpie packet) {
     ready = true;
+    _connectAttempts = 0;  // handshake complete: retry counter resets
     // the pipe to the peer: created when the handshake completes
     // (responder role) - the initiator dials first, the responder's
     // pipe is born on the peer's "ACK!"

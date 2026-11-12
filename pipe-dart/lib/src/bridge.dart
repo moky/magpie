@@ -84,6 +84,10 @@ class BridgeLink extends BaseLink with PayloadMixIn {
   /// resends against FAIL floods (docs/client.md §4.3).
   DateTime? _lastAckResend;
 
+  /// "SYN?" retries sent since the last handshake began (reset when the
+  /// handshake completes).
+  int _connectAttempts = 0;
+
   /// Send a "SYN?" handshake to the server: ask for a bridge id.
   ///
   /// The payload is `{"time": ..., "enigmas": [...], "blah": ...}`,
@@ -92,6 +96,7 @@ class BridgeLink extends BaseLink with PayloadMixIn {
   /// (docs/client.md §5.2).
   @override
   void connect([DateTime? now]) {
+    closed = false;  // (re-)open: re-grant the retry budget
     now ??= DateTime.now();
     final request = {
       'enigmas': enigma.keyNames,
@@ -109,6 +114,7 @@ class BridgeLink extends BaseLink with PayloadMixIn {
   @override
   void disconnect([DateTime? now]) {
     ready = false;
+    closed = true;  // intentional close: the run loop stops re-dialing
     final source = bid;
     if (source == 0) {
       return;
@@ -123,11 +129,41 @@ class BridgeLink extends BaseLink with PayloadMixIn {
     ));
   }
 
+  /// Whether an established session has gone silent (docs/client.md §8):
+  /// nothing has been received for D = `record_active_timeout` - the
+  /// server record is likely gone, the manager should clean up the pipes
+  /// and re-handshake, or switch to another server.
+  ///
+  /// Returns false when nothing has ever been received (a fresh link is
+  /// not stale).
+  @override
+  bool isSessionStale(DateTime now) {
+    final lastReceived = lastReceivedTime;
+    if (lastReceived == null) {
+      // nothing received yet: a fresh link is not stale
+      return false;
+    }
+    // nothing received for D: the server record is likely gone
+    return now.difference(lastReceived).inMilliseconds >=
+        config.recordActiveTimeout * 1000;
+  }
+
   /// Clean up the stale session and restart the handshake: the run loop
-  /// calls this when the link is disconnected (no packet received for
-  /// D = `Config.recordActiveTimeout`, docs/client.md §8) - the server
-  /// record is likely gone, so the client applies for a bid again.
-  void reconnect([DateTime? now]) {
+  /// calls this when [needsReconnect] is true - either the server record
+  /// is likely gone (no packet received for D =
+  /// `Config.recordActiveTimeout`, docs/client.md §8), or the handshake
+  /// is stuck and the "SYN?" needs a re-send.
+  ///
+  /// The rate limit itself lives in [needsReconnect]; this only caps the
+  /// attempt count at [Config.handshakeRetryLimit] - past it the link
+  /// goes quiet and the app decides whether to drop it.
+  void reconnect(DateTime now) {
+    if (_connectAttempts >= config.handshakeRetryLimit) {
+      // give up: keep quiet, the upper layer decides
+      return;
+    }
+    // count this dial before sending
+    _connectAttempts += 1;
     // clean up the stale session: pipes and permits died with the
     // server record
     ready = false;
@@ -142,29 +178,24 @@ class BridgeLink extends BaseLink with PayloadMixIn {
     connect(now);
   }
 
-  /// Idle-triggered heartbeat (docs/client.md §6): when no datagram has
-  /// been sent or received for [Config.heartbeatInterval], send a "PING"
-  /// with the payload `{"time": ...}`.
+  /// Idle-triggered heartbeat (docs/client.md §6): send a "PING" with
+  /// the payload `{"time": ...}`. Always sends - gate the call with
+  /// [needsHeartbeat] the way [MagHub.keepAlive] does; without a bid
+  /// (handshake unfinished) this is a no-op.
   ///
   /// The ping is signed with the session [secret] when bound (the server
   /// answers "PONG" to verified pings only, echoing the payload back with
   /// a fresh "time"). PONGs are neither awaited nor retransmitted: the
   /// outgoing ping itself already resets the NAT mapping.
   @override
-  void heartbeat([DateTime? now]) {
+  void heartbeat(DateTime now) {
     final source = bid;
     if (source == 0) {
-      // not handshake yet
-      return;
-    } else if (!ready) {
-      // closed
-      return;
-    }
-    now ??= DateTime.now();
-    if (!needsHeartbeat(now)) {
+      // not handshake yet: nothing to keep alive
       return;
     }
     final request = {
+      'start_time': DateTime.now().millisecondsSinceEpoch / 1000.0, // for speed
       'time': now.millisecondsSinceEpoch / 1000.0,
     };
     sendPacket(packetFactory.ping(
@@ -193,30 +224,29 @@ class BridgeLink extends BaseLink with PayloadMixIn {
     if (secretB64 is! String || token is! String) {
       return;  // malformed: both 'secret' and 'token' are required
     }
-    // the assigned bid travels in the packet header
-    bid = target;
     // the server-observed address of this socket, for direct probing
     final udp = info['UDP'];
     if (udp is String) {
       observedAddress = udp;
     }
     // session key: plain mode carries it base64-encoded; encrypted mode
-    // wraps it in an 'enigma' bundle
+    // wraps it in an 'enigma' bundle (derived with the assigned bid)
     Uint8List? messageKey;
     final bundle = info['enigma'];
     if (bundle is Map) {
-      final enc = HkdfEnc.parse(bundle, bid: bid);
+      final enc = HkdfEnc.parse(bundle, bid: target);
       messageKey = enc == null ? null : enigma.decryptSecret(secretB64, enc);
     } else {
       assert(bundle == null, 'enigma bundle error: $bundle');
       messageKey = Base64.decode(secretB64);
     }
     if (messageKey == null) {
-      // key mismatch or tampered handshake
+      // key mismatch or tampered handshake: the bid stays uncommitted
       assert(false, 'decryption failed: $packet');
       return;
     }
     secret = messageKey;
+    bid = target;  // commit: trusted only after the decryption checks
 
     // answer "ACK!": the handshake parameters echo back as-is
     final response = {
@@ -232,6 +262,7 @@ class BridgeLink extends BaseLink with PayloadMixIn {
     _lastAck = ack;
     sendPacket(ack, encryptedMode: bundle is Map);
     ready = true;
+    _connectAttempts = 0;  // handshake complete: retry counter resets
     // the pipe to the server itself (bid 0): (re)created on every
     // handshake completion, so PONG/FAIL/DONE have a pipe right away
     _serverPipe ??= _newPipe(0);
@@ -286,7 +317,9 @@ class BridgeLink extends BaseLink with PayloadMixIn {
     _lastAckResend = now;
     final ack = _lastAck;
     if (ack != null) {
-      sendPacket(ack);
+      // byte-identical to the original handshake wave: no re-signing
+      // (sendPacket would attach an HMAC the first ACK! never carried)
+      packAndSend(ack);
     }
   }
 
@@ -447,22 +480,6 @@ class BridgeLink extends BaseLink with PayloadMixIn {
       }
     }
     return pipe;
-  }
-
-  /// Whether no packet has been received for D = `record_active_timeout`
-  /// (docs/client.md §6): the server record is likely gone, the manager
-  /// should clean up the pipes and re-handshake, or switch to another
-  /// server.
-  bool get disconnected {
-    if (!ready) {
-      return false;
-    }
-    final lastReceived = lastReceivedTime;
-    if (lastReceived == null) {
-      return false;
-    }
-    return DateTime.now().difference(lastReceived) >=
-        Duration(seconds: config.recordActiveTimeout.round());
   }
 
 }

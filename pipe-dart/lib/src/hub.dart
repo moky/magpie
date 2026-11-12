@@ -93,7 +93,7 @@ class MagHub {
     if (link == null) {
       link = DirectLink(socket, remote, enigma: enigma);
       directLinks[remote] = link;
-      link.connect();  // stateless no-op
+      link.connect();  // send "SYN?" (stateless handshake)
     }
     return link;
   }
@@ -212,20 +212,28 @@ class MagHub {
     return pipe.sendData(payload, sn: sn, index: index, count: count);
   }
 
-  /// The run loop: scan all links on schedule. Bridge links that have
-  /// received nothing for D = `record_active_timeout` are re-connected
-  /// (the server record is likely gone, docs/client.md §8); the rest
-  /// heartbeat by themselves when idle.
+  /// The run loop: scan all links on schedule, calling what each link
+  /// needs (docs/client.md §6, §8):
+  ///   * bridge link - [BridgeLink.needsReconnect] when the server record
+  ///     is likely gone or the handshake is stuck (re-handshake), else
+  ///     [BridgeLink.heartbeat] when idle;
+  ///   * direct link - [DirectLink.reconnect] while the handshake is
+  ///     unfinished (rate-limited "SYN?" retries), else
+  ///     [DirectLink.heartbeat] when idle.
   void keepAlive(DateTime now) {
     for (var link in bridgeLinks.values) {
-      if (link.disconnected) {
+      if (link.needsReconnect(now)) {
         link.reconnect(now);
-      } else {
+      } else if (link.needsHeartbeat(now)) {
         link.heartbeat(now);
       }
     }
     for (var link in directLinks.values) {
-      link.heartbeat(now);
+      if (link.needsReconnect(now)) {
+        link.reconnect(now);
+      } else if (link.needsHeartbeat(now)) {
+        link.heartbeat(now);
+      }
     }
   }
 
