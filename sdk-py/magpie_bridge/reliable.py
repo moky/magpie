@@ -43,6 +43,9 @@ class BasePacket(Packet):
         payload. It also carries the sign() capability: signing is computed
         over the bare header + payload of the inner packet, so calling
         sign() on an already-signed ReliablePacket simply re-signs it.
+
+        It inherits __str__ from Packet, so printing a packet renders a
+        one-line human-readable dump.
     """
 
     def __init__(self, packet: Packet):
@@ -172,6 +175,11 @@ class ReliablePacket(BasePacket):
     def attachment(self) -> bytes:
         """ The 32-byte HMAC-SHA256 digest. """
         return self.__attachment
+
+    # Override
+    def __len__(self) -> int:
+        """ Total wire size in bytes: header + payload + the 32-byte attachment. """
+        return self.header_length + self.payload_length + len(self.__attachment)
 
     #
     #   Serialization

@@ -46,6 +46,9 @@ class MessagePacket(Packet):
         receive BridgePacket / DirectPacket / ReliablePacket wrappers from
         the factories, which delegate back to an inner MessagePacket.
 
+        It inherits __str__ from Packet, so printing a packet renders a
+        one-line human-readable dump.
+
         The header length obeys the formula N = 8 + 8*B + 4*D + 2*E + 4*C.
     """
 

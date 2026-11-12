@@ -2,7 +2,8 @@
 ///
 /// The SDK is organised into three facades, re-exported here:
 ///   * `protocol` — wire-format constants, header calculations, the
-///     [Magpie] / [Packet] interfaces and the reserved [Command] values;
+///     [Magpie] / [Packet] interfaces, the reserved [Command] values and
+///     the [HumanReadablePacket] dump mixin;
 ///   * `magpie`   — the concrete packet classes ([MessagePacket],
 ///     [BridgePacket], [DirectPacket], [ReliablePacket]) plus the
 ///     [BasePacket] delegation base they share;

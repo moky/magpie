@@ -41,8 +41,11 @@ import 'protocol/protocol.dart';
 /// receive [BridgePacket] / [DirectPacket] / [ReliablePacket] wrappers
 /// from the factories, which delegate back to an inner [MessagePacket].
 ///
+/// It mixes in [HumanReadablePacket], so printing a packet renders a
+/// one-line human-readable dump.
+///
 /// The header length obeys the formula N = 8 + 8·B + 4·D + 2·E + 4·C.
-class MessagePacket implements Packet {
+class MessagePacket with HumanReadablePacket implements Packet {
   /// Create a packet from already computed header fields.
   ///
   /// [buffer] is the cached wire bytes when the packet came from parsing,

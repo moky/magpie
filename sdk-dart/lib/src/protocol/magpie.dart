@@ -115,3 +115,54 @@ abstract interface class Packet implements Magpie {
   int get payloadLength;
 
 }
+
+/// Human-readable one-line dump shared by all packet classes.
+///
+/// [HumanReadablePacket] is mixed into `MessagePacket` and `BasePacket`,
+/// so every concrete packet (`BridgePacket`, `DirectPacket` and
+/// `ReliablePacket` included) renders itself as a single line via
+/// [toString]: the class name, the set flags (A/B/C/D and the E width),
+/// then the optional header fields that actually exist on the wire,
+/// ending with the byte sizes.
+mixin HumanReadablePacket implements Packet {
+
+  /// Class name shown by [toString]: the actual runtime type when asserts
+  /// are enabled (debug builds), or the fixed `'MagpiePacket'` otherwise.
+  String get className {
+    String name = 'MagpiePacket';
+    assert(() {
+      name = runtimeType.toString();
+      return true;
+    }());
+    return name;
+  }
+
+  /// Total size of the bare packet in bytes: header plus payload.
+  ///
+  /// Subclasses may refine it — e.g. `ReliablePacket` counts the
+  /// 32-byte attachment as well.
+  int get length => headerLength + payloadLength;
+
+  /// One-line dump, e.g.
+  /// `ReliablePacket{BID,CMD,EXT=0; target=0, source=123, command=0x50494e47, header=20B, payload=1B, packet=53B}`.
+  ///
+  /// The flags block stays compact and is closed by a semicolon; each
+  /// optional field is separated by a comma and a space.
+  @override
+  String toString() {
+    final sb = StringBuffer('$className{');
+    if (ack == 1) sb.write('ACK,');
+    if (bid == 1) sb.write('BID,');
+    if (cmd == 1) sb.write('CMD,');
+    if (dsn == 1) sb.write('DSN,');
+    sb.write('EXT=$ext;');
+    if (bid == 1) sb.write(' target=$target, source=$source,');
+    if (dsn == 1) sb.write(' sn=$sn,');
+    if (ext != 0) sb.write(' index=$index/$count,');
+    if (cmd == 1) sb.write(' command=0x${command.toRadixString(16)},');
+    sb.write(' header=${headerLength}B,');
+    sb.write(' payload=${payloadLength}B,');
+    sb.write(' packet=${length}B}');
+    return sb.toString();
+  }
+}

@@ -1,5 +1,6 @@
 /// Protocol layer: wire-format constants, header calculations and the
-/// [Magpie] / [Packet] interfaces.
+/// [Magpie] / [Packet] interfaces, plus the [HumanReadablePacket] dump
+/// mixin shared by all packet classes.
 ///
 /// Import this facade when you only need the wire format primitives
 /// (constants, calculators, command values, interfaces), without the
@@ -8,4 +9,4 @@ library;
 
 export 'src/protocol/protocol.dart';  // constants & header calculations
 export 'src/protocol/command.dart';   // reserved command values
-export 'src/protocol/magpie.dart';    // Magpie / Packet interfaces
+export 'src/protocol/magpie.dart';    // Magpie / Packet interfaces + dump mixin

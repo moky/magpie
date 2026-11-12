@@ -160,3 +160,47 @@ class Packet(Magpie, ABC):
         raise NotImplementedError(
             f'Not implemented: {type(self).__module__}.{type(self).__name__}.payload_length getter'
         )
+
+    #
+    #   Human-readable dump
+    #
+
+    # Override
+    def __len__(self) -> int:
+        """ Total size of the bare packet in bytes: header plus payload.
+
+            Subclasses may refine it - e.g. ReliablePacket counts the
+            32-byte attachment as well.
+        """
+        return self.header_length + self.payload_length
+
+    # Override
+    def __str__(self) -> str:
+        """ One-line dump, e.g.
+                ReliablePacket{BID,CMD,EXT=0; target=0, source=123, command=0x50494e47, header=20B, payload=1B, packet=53B}
+
+            The flags block stays compact and is closed by a semicolon; each
+            optional field is separated by a comma and a space.
+        """
+        sb = type(self).__name__ + '{'
+        if self.ack == 1:
+            sb += 'ACK,'
+        if self.bid == 1:
+            sb += 'BID,'
+        if self.cmd == 1:
+            sb += 'CMD,'
+        if self.dsn == 1:
+            sb += 'DSN,'
+        sb += 'EXT=%d;' % self.ext
+        if self.bid == 1:
+            sb += ' target=%d, source=%d,' % (self.target, self.source)
+        if self.dsn == 1:
+            sb += ' sn=%d,' % self.sn
+        if self.ext != 0:
+            sb += ' index=%d/%d,' % (self.index, self.count)
+        if self.cmd == 1:
+            sb += ' command=0x%x,' % self.command
+        sb += ' header=%dB,' % self.header_length
+        sb += ' payload=%dB,' % self.payload_length
+        sb += ' packet=%dB}' % len(self)
+        return sb

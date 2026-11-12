@@ -42,7 +42,10 @@ import 'x.dart';
 /// validated payload. It also carries the [sign] capability: signing is
 /// computed over the bare header + payload of the inner packet, so calling
 /// [sign] on an already-signed [ReliablePacket] simply re-signs it.
-class BasePacket implements Packet {
+///
+/// It mixes in [HumanReadablePacket], so printing a packet renders a
+/// one-line human-readable dump.
+class BasePacket with HumanReadablePacket implements Packet {
   /// Wrap [packet] as the delegation target.
   BasePacket(this._packet);
 
@@ -124,6 +127,10 @@ class ReliablePacket extends BasePacket {
 
   /// The 32-byte HMAC-SHA256 digest.
   final Uint8List attachment;
+
+  /// Total wire size in bytes: header + payload + the 32-byte attachment.
+  @override
+  int get length => headerLength + payloadLength + attachment.length;
 
   //
   //  Serialization

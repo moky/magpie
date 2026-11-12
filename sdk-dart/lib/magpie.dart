@@ -5,10 +5,12 @@
 /// that [BridgePacket] / [DirectPacket] / [ReliablePacket] extend, and
 /// [ReliablePacket] adds the 32-byte HMAC-SHA256 attachment plus [sign].
 ///
-/// All packet classes are read-only and thread-safe to share once built.
+/// All packet classes are read-only and thread-safe to share once built,
+/// and every one of them mixes in [HumanReadablePacket], so printing a
+/// packet renders a one-line human-readable dump.
 library;
 
-export 'src/protocol/magpie.dart';  // Magpie / Packet interfaces
+export 'src/protocol/magpie.dart';  // Magpie / Packet interfaces + dump mixin
 
 export 'src/packet.dart';    // MessagePacket: pure pack logic
 export 'src/reliable.dart';  // BasePacket / ReliablePacket / sign / verify

@@ -1,3 +1,7 @@
+## 0.3.2
+
+- Human-readable.
+
 ## 0.3.1
 
 - Required payload.
