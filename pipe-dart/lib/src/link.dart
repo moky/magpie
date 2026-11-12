@@ -61,19 +61,29 @@ abstract interface class MagLink {
 }
 
 abstract class BaseLink implements MagLink {
-  BaseLink(this.socket, this.remote, {required this.enigma});
+  BaseLink(this.socket, this.remoteAddress, {required this.enigma});
 
   /// The bound local UDP socket.
   final RawDatagramSocket socket;
 
-  /// The remote endpoint (peer's IP address + UDP port).
-  final SocketAddress remote;
+  /// The remote endpoint of this connection (IP address + UDP port):
+  /// the relay server for a bridge link, the peer for a direct link.
+  final SocketAddress remoteAddress;
+
+  /// The local address as observed by the peer, carried in the "UDP"
+  /// field of the "SYN!" payload (bridge: docs/client.md §5.1,
+  /// direct: docs/workflow.md §2.3); null until the handshake
+  /// delivers it.
+  String? observedAddress;
 
   /// The peer's IP address.
-  InternetAddress get host => remote.host;
+  InternetAddress get host => remoteAddress.host;
 
   /// The peer's UDP port.
-  int get port => remote.port;
+  int get port => remoteAddress.port;
+
+  @override
+  bool ready = false;
 
   /// The configuration (handshake parameters, etc.); the app loads
   /// values via `config.update({...})`.
@@ -116,6 +126,11 @@ abstract class BaseLink implements MagLink {
   /// once the handshake completes.
   final List<Magpie> _pendingPackets = [];
 
+  /// Upper bound for [_pendingPackets]: further packets are dropped
+  /// (sendPacket returns false) while the queue is full.
+  static int maxPendingPackets = 256;
+
+  /// Send the packets deferred while re-handshaking.
   void drain() {
     final deferred = List.of(_pendingPackets);
     _pendingPackets.clear();
@@ -126,7 +141,7 @@ abstract class BaseLink implements MagLink {
 
   bool _send(Magpie packet) {
     final data = packet.pack();
-    int size = socket.send(data, remote.host, remote.port);
+    final size = socket.send(data, host, port);
     if (size != data.length) {
       return false;
     }
@@ -134,6 +149,10 @@ abstract class BaseLink implements MagLink {
     return true;
   }
 
+  /// Pack and send the datagram to the remote endpoint, refreshing
+  /// the last-send time for the heartbeat idle check. Data commands
+  /// sent while the handshake is still in progress are deferred to
+  /// [_pendingPackets] (bounded by [maxPendingPackets]).
   bool sendPacket(Magpie packet, {
     bool encryptedMode = true,
   }) {
@@ -166,7 +185,10 @@ abstract class BaseLink implements MagLink {
     if (ready) {
       return _send(packet);
     } else if (command != Command.PING && command != Command.PONG) {
-      // waiting for handshake
+      // waiting for handshake (bounded: keep the newest packets)
+      if (_pendingPackets.length >= maxPendingPackets) {
+        _pendingPackets.removeAt(0);
+      }
       _pendingPackets.add(packet);
     }
     return false;

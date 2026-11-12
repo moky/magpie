@@ -41,15 +41,30 @@ import 'pipe.dart';
 /// Link to a peer directly (B=0): the three-way handshake (SYN?/SYN!/
 /// ACK!) establishes the connection without secret/token; data packets
 /// are answered with "COPY" and handed to the pipe to process.
+///
+/// Direct links are unauthenticated by design: the app layer owns
+/// payload security, the connection layer stays stateless and light
+/// (unlike the bridge link - its server is a long-lived public target,
+/// hence the encrypted handshake there).
 class DirectLink extends BaseLink with PayloadMixIn {
-  DirectLink(super.socket, super.remote, {required super.enigma});
+  DirectLink(super.socket, super.remoteAddress, {required super.enigma});
+
+  String get className {
+    String name = 'DirectLink';
+    assert(() {
+      name = runtimeType.toString();
+      return true;
+    }());
+    return name;
+  }
+
+  @override
+  String toString() => '$className{'
+      'remote=$remoteAddress, observed=$observedAddress}';
 
   final packetFactory = DirectPacketFactory();
 
   DirectPipe? _directPipe;
-
-  @override
-  bool ready = false;
 
   /// Initiator side: send a "SYN?" to start the three-way handshake
   /// (docs/workflow.md §2.3). Both sides may call [connect] - the
@@ -60,6 +75,8 @@ class DirectLink extends BaseLink with PayloadMixIn {
     final request = {
       'time': now.millisecondsSinceEpoch / 1000.0,
     };
+    // the pipe to the peer: created at dial time (initiator role), so
+    // the app can fire early - packets are queued until ready
     _directPipe ??= _newPipe();
     sendPacket(packetFactory.syn(
       encodePayload(request),
@@ -70,6 +87,7 @@ class DirectLink extends BaseLink with PayloadMixIn {
   /// (docs/workflow.md §2.4).
   @override
   void disconnect([DateTime? now]) {
+    ready = false;
     now ??= DateTime.now();
     final request = {
       'time': now.millisecondsSinceEpoch / 1000.0,
@@ -86,7 +104,7 @@ class DirectLink extends BaseLink with PayloadMixIn {
   @override
   void heartbeat([DateTime? now]) {
     if (!ready) {
-      // not handshook yet
+      // closed
       return;
     }
     now ??= DateTime.now();
@@ -102,10 +120,18 @@ class DirectLink extends BaseLink with PayloadMixIn {
   }
 
   /// Respond to the peer's "SYN?": reply "SYN!" (responder side of the
-  /// three-way handshake, docs/workflow.md §2.3).
+  /// three-way handshake, docs/workflow.md §2.3) with the peer's
+  /// observed address in the "UDP" field (`ip:port` for IPv4,
+  /// `[ip]:port` for IPv6, same format as the bridge server).
   void _handleSyn(Magpie packet) {
+    final host = remoteAddress.host.address;
+    final port = remoteAddress.port;
+    final observed = host.contains(':')
+        ? '[$host]:$port'   // IPv6 literal
+        : '$host:$port';
     final response = {
       'time': DateTime.now().millisecondsSinceEpoch / 1000.0,
+      'UDP': observed,
     };
     sendPacket(packetFactory.synAck(
       encodePayload(response),
@@ -114,6 +140,12 @@ class DirectLink extends BaseLink with PayloadMixIn {
 
   /// The peer's "SYN!" received (initiator side): confirm with "ACK!".
   void _handleSynAck(Magpie packet) {
+    final info = decodePayload(packet.payload);
+    // the peer-observed address of this socket
+    final udp = info['UDP'];
+    if (udp is String) {
+      observedAddress = udp;
+    }
     final response = {
       'time': DateTime.now().millisecondsSinceEpoch / 1000.0,
     };
@@ -121,11 +153,21 @@ class DirectLink extends BaseLink with PayloadMixIn {
       encodePayload(response),
     ));
     ready = true;
+
+    // flush the packets the app fired before the handshake completed
+    drain();
   }
 
   /// The peer's "ACK!" received (responder side): handshake complete.
   void _handleAck(Magpie packet) {
     ready = true;
+    // the pipe to the peer: created when the handshake completes
+    // (responder role) - the initiator dials first, the responder's
+    // pipe is born on the peer's "ACK!"
+    _directPipe ??= _newPipe();
+
+    // flush the packets the app fired before the handshake completed
+    drain();
   }
 
   /// Reply "FIN!" to the peer's "FIN?" (minimal wave - the reverse

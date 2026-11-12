@@ -45,15 +45,23 @@ import 'pipe.dart';
 /// command handling are implemented; data packets are answered with
 /// "COPY" and handed to the pipe of the source peer.
 class BridgeLink extends BaseLink with PayloadMixIn {
-  BridgeLink(super.socket, super.remote, {required super.enigma});
+  BridgeLink(super.socket, super.remoteAddress, {required super.enigma});
 
   /// The bid assigned by the server after the handshake (0 = not yet).
   int bid = 0;
 
-  /// The client's public address as observed by the server (the "UDP"
-  /// field of the "SYN!" payload, for direct-connection probing,
-  /// docs/client.md §5.1); null until the handshake delivers it.
-  String? localAddress;
+  String get className {
+    String name = 'BridgeLink';
+    assert(() {
+      name = runtimeType.toString();
+      return true;
+    }());
+    return name;
+  }
+
+  @override
+  String toString() => '$className{bid=$bid, '
+      'remote=$remoteAddress, observed=$observedAddress}';
 
   final packetFactory = BridgePacketFactory();
 
@@ -75,9 +83,6 @@ class BridgeLink extends BaseLink with PayloadMixIn {
   /// The time of the last "ACK!" resend: rate-limits the idempotent
   /// resends against FAIL floods (docs/client.md §4.3).
   DateTime? _lastAckResend;
-
-  @override
-  bool ready = false;
 
   /// Send a "SYN?" handshake to the server: ask for a bridge id.
   ///
@@ -193,7 +198,7 @@ class BridgeLink extends BaseLink with PayloadMixIn {
     // the server-observed address of this socket, for direct probing
     final udp = info['UDP'];
     if (udp is String) {
-      localAddress = udp;
+      observedAddress = udp;
     }
     // session key: plain mode carries it base64-encoded; encrypted mode
     // wraps it in an 'enigma' bundle
@@ -214,14 +219,14 @@ class BridgeLink extends BaseLink with PayloadMixIn {
     secret = messageKey;
 
     // answer "ACK!": the handshake parameters echo back as-is
-    final request = {
+    final response = {
       'enigma': bundle,
       'secret': secretB64,
       'token': token,
       'time': DateTime.now().millisecondsSinceEpoch / 1000.0,
     };
     final ack = packetFactory.ack(
-      padPayload(request, config: config),
+      padPayload(response, config: config),
       source: target,
     );
     _lastAck = ack;
@@ -229,7 +234,7 @@ class BridgeLink extends BaseLink with PayloadMixIn {
     ready = true;
     // the pipe to the server itself (bid 0): (re)created on every
     // handshake completion, so PONG/FAIL/DONE have a pipe right away
-    _serverPipe = _newPipe(0);
+    _serverPipe ??= _newPipe(0);
 
     // flush the packets deferred while re-handshaking
     drain();

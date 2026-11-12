@@ -45,7 +45,8 @@ format and `docs/client.md` for the client behaviour.
 ```dart
 var hub = await MagHub.create();
 
-// pipes are built by the registered factory (required):
+// pipes are built by the registered factory (required); the factory
+// also carries the optional packet observer (pipeDelegate):
 sharedPipeExtensions.pipeFactory = PipeFactory();
 
 // bridge connection to the relay server (B=1):

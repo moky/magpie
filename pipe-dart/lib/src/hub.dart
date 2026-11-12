@@ -146,7 +146,7 @@ class MagHub {
   MagPipe? getBridgePipe(SocketAddress remote, int target) {
     final link = connectBridge(remote);
     var pipe = link.getPipe(target);
-    if (pipe == null && target != 0 && link.ready) {
+    if (pipe == null && target != 0 && link.bid != 0) {
       // no pipe for this bid yet: permit it, then look up again
       link.accept([target]);
       pipe = link.getPipe(target);

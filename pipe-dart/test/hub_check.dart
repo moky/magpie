@@ -118,18 +118,30 @@ Future<void> main() async {
   }
   check(asserted, '5a: pre-ready bridge send trips the assert');
 
-  // 5b. sendData: connection not ready -> false
+  // 5b. sendData on a pre-ready direct link: queued while re-handshaking
   check(!hub.sendData(Uint8List.fromList([1]), remote: (host: peer.address, port: peer.port), target: 0, sn: 1),
       '5b: not ready -> false');
 
-  // 5c. sendData: ready + pipe -> peer receives the DATA packet
-  direct.ready = true;
-  check(hub.sendData(UTF8.encode("abc"), remote: (host: peer.address, port: peer.port), target: 0, sn: 42),
-      '5c: sendData ok');
+  // 5c. the fake peer completes the handshake: sends its own "SYN?" —
+  // the hub replies "SYN!" and, on the peer's "ACK!", turns ready and
+  // flushes the deferred packet
+  peer.send(DirectPacketFactory().syn(Uint8List.fromList([1, 2, 3])).pack(), hub.socket.address, hub.socket.port);
+  dg = await receive(peer, const Duration(seconds: 1));
+  check(dg != null, '5c: SYN! replied');
+  peer.send(DirectPacketFactory().ack(Uint8List.fromList([4, 5, 6])).pack(), hub.socket.address, hub.socket.port);
+  await Future.delayed(const Duration(milliseconds: 200));
+  check(direct.ready, '5c: handshake completed');
+
+  // 5d. the deferred packet flushed at ready; post-ready send delivers
   var ddg = await receive(peer, const Duration(seconds: 1));
   var dataPacket = ddg == null ? null : DirectPacketFactory().parse(ddg.data);
-  check(dataPacket != null && dataPacket.sn == 42, '5c: DATA received with sn=42');
-  check(UTF8.decode(dataPacket!.payload) == 'abc', '5c: payload intact');
+  check(dataPacket != null && dataPacket.sn == 1, '5d: deferred packet flushed');
+  check(hub.sendData(UTF8.encode("abc"), remote: (host: peer.address, port: peer.port), target: 0, sn: 42),
+      '5d: sendData ok');
+  ddg = await receive(peer, const Duration(seconds: 1));
+  dataPacket = ddg == null ? null : DirectPacketFactory().parse(ddg.data);
+  check(dataPacket != null && dataPacket.sn == 42, '5d: DATA received with sn=42');
+  check(UTF8.decode(dataPacket!.payload) == 'abc', '5d: payload intact');
 
   // 6. disconnect() removes and sends FIN? (bridge)
   var removed = hub.disconnect((host: server.address, port: server.port));

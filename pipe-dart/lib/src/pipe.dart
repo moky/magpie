@@ -78,6 +78,19 @@ class DirectPipe with PayloadMixIn implements MagPipe {
   /// The connection this pipe is attached to.
   final DirectLink connection;
 
+  String get className {
+    String name = 'DirectPipe';
+    assert(() {
+      name = runtimeType.toString();
+      return true;
+    }());
+    return name;
+  }
+
+  @override
+  String toString() => '$className{'
+      'remote=${connection.remoteAddress}, observed=${connection.observedAddress}}';
+
   final packetFactory = DirectPacketFactory();
 
   @override
@@ -154,6 +167,19 @@ class BridgePipe with PayloadMixIn implements MagPipe {
 
   final int remote;  // contact's bid
   final int local;   // my bid
+
+  String get className {
+    String name = 'BridgePipe';
+    assert(() {
+      name = runtimeType.toString();
+      return true;
+    }());
+    return name;
+  }
+
+  @override
+  String toString() => '$className{'
+      'target=$remote, source=$local, bridge=${connection.remoteAddress}';
 
   final packetFactory = BridgePacketFactory();
 
