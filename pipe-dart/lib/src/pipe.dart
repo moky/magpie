@@ -139,8 +139,9 @@ class DirectPipe with PayloadMixIn implements MagPipe {
   }
 
   void _replyPong(Magpie packet) {
+    final now = DateTime.now();
     final info = decodePayload(packet.payload);
-    info['time'] = DateTime.now().millisecondsSinceEpoch / 1000.0;
+    info['time'] = now.millisecondsSinceEpoch / 1000.0;
     sendPacket(packetFactory.pong(
       encodePayload(info),
       packet,
@@ -148,8 +149,9 @@ class DirectPipe with PayloadMixIn implements MagPipe {
   }
 
   void _replyCopy(Magpie packet) {
+    final now = DateTime.now();
     final request = {
-      'time': DateTime.now().millisecondsSinceEpoch / 1000.0,
+      'time': now.millisecondsSinceEpoch / 1000.0,
     };
     sendPacket(packetFactory.copy(
       encodePayload(request),
@@ -237,8 +239,9 @@ class BridgePipe with PayloadMixIn implements MagPipe {
   }
 
   void _replyPong(Magpie packet) {
+    final now = DateTime.now();
     final info = decodePayload(packet.payload);
-    info['time'] = DateTime.now().millisecondsSinceEpoch / 1000.0;
+    info['time'] = now.millisecondsSinceEpoch / 1000.0;
     sendPacket(packetFactory.pong(
       encodePayload(info),
       packet,
@@ -246,8 +249,9 @@ class BridgePipe with PayloadMixIn implements MagPipe {
   }
 
   void _replyCopy(Magpie packet) {
+    final now = DateTime.now();
     final request = {
-      'time': DateTime.now().millisecondsSinceEpoch / 1000.0,
+      'time': now.millisecondsSinceEpoch / 1000.0,
     };
     sendPacket(packetFactory.copy(
       encodePayload(request),

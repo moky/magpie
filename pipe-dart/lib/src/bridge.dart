@@ -137,12 +137,13 @@ class BridgeLink extends BaseLink with PayloadMixIn {
   /// Returns false when nothing has ever been received (a fresh link is
   /// not stale).
   @override
-  bool isSessionStale(DateTime now) {
+  bool isSessionStale([DateTime? now]) {
     final lastReceived = lastReceivedTime;
     if (lastReceived == null) {
       // nothing received yet: a fresh link is not stale
       return false;
     }
+    now ??= DateTime.now();
     // nothing received for D: the server record is likely gone
     return now.difference(lastReceived).inMilliseconds >=
         config.recordActiveTimeout * 1000;
@@ -157,7 +158,7 @@ class BridgeLink extends BaseLink with PayloadMixIn {
   /// The rate limit itself lives in [needsReconnect]; this only caps the
   /// attempt count at [Config.handshakeRetryLimit] - past it the link
   /// goes quiet and the app decides whether to drop it.
-  void reconnect(DateTime now) {
+  void reconnect([DateTime? now]) {
     if (_connectAttempts >= config.handshakeRetryLimit) {
       // give up: keep quiet, the upper layer decides
       return;
@@ -188,14 +189,14 @@ class BridgeLink extends BaseLink with PayloadMixIn {
   /// a fresh "time"). PONGs are neither awaited nor retransmitted: the
   /// outgoing ping itself already resets the NAT mapping.
   @override
-  void heartbeat(DateTime now) {
+  void heartbeat([DateTime? now]) {
     final source = bid;
     if (source == 0) {
       // not handshake yet: nothing to keep alive
       return;
     }
+    now ??= DateTime.now();
     final request = {
-      'start_time': DateTime.now().millisecondsSinceEpoch / 1000.0, // for speed
       'time': now.millisecondsSinceEpoch / 1000.0,
     };
     sendPacket(packetFactory.ping(
@@ -249,11 +250,12 @@ class BridgeLink extends BaseLink with PayloadMixIn {
     bid = target;  // commit: trusted only after the decryption checks
 
     // answer "ACK!": the handshake parameters echo back as-is
+    final now = DateTime.now();
     final response = {
       'enigma': bundle,
       'secret': secretB64,
       'token': token,
-      'time': DateTime.now().millisecondsSinceEpoch / 1000.0,
+      'time': now.millisecondsSinceEpoch / 1000.0,
     };
     final ack = packetFactory.ack(
       padPayload(response, config: config),
@@ -283,8 +285,9 @@ class BridgeLink extends BaseLink with PayloadMixIn {
     // unexpected "FIN!" (kicked by a forged "FIN?" attack): answer
     // "NOOP" at once to refresh the immunity window and stay online
     // (docs/workflow.md §3.1)
+    final now = DateTime.now();
     final request = {
-      'time': DateTime.now().millisecondsSinceEpoch / 1000.0,
+      'time': now.millisecondsSinceEpoch / 1000.0,
     };
     sendPacket(packetFactory.noop(
       encodePayload(request),
@@ -379,9 +382,10 @@ class BridgeLink extends BaseLink with PayloadMixIn {
       // first handshake not done yet: no bid to permit with
       return false;
     }
+    final now = DateTime.now();
     final request = {
       'sources': sources,
-      'time': DateTime.now().millisecondsSinceEpoch / 1000.0,
+      'time': now.millisecondsSinceEpoch / 1000.0,
     };
     final packet = command == Command.ACPT
         ? packetFactory.acpt(encodePayload(request), source: local)

@@ -47,7 +47,7 @@ abstract interface class MagLink {
 
   void disconnect([DateTime? now]);
 
-  void heartbeat(DateTime now);
+  void heartbeat([DateTime? now]);
 
   /// Called when received raw bytes from the peer.
   void received(Uint8List data);
@@ -118,7 +118,7 @@ abstract class BaseLink implements MagLink {
   /// reconnects instead), or when nothing has ever been sent on this
   /// link (nothing to keep alive yet).
   // protected
-  bool needsHeartbeat(DateTime now) {
+  bool needsHeartbeat([DateTime? now]) {
     if (!ready) {
       // handshake unfinished, or disconnected
       return false;
@@ -134,6 +134,7 @@ abstract class BaseLink implements MagLink {
       // no traffic yet
       return false;
     }
+    now ??= DateTime.now();
     return now.difference(lastActive).inMilliseconds > config.heartbeatInterval * 1000;
   }
 
@@ -147,7 +148,7 @@ abstract class BaseLink implements MagLink {
   ///     so re-send one - the first datagram may have been lost; true
   ///     at once when nothing has been sent yet.
   // protected
-  bool needsReconnect(DateTime now) {
+  bool needsReconnect([DateTime? now]) {
     if (ready) {
       return isSessionStale(now);
     }
@@ -159,7 +160,7 @@ abstract class BaseLink implements MagLink {
   /// "SYN?" went out at least [Config.handshakeInterval] ago - at most
   /// one "SYN?" per handshake interval.
   // protected
-  bool isHandshakeStuck(DateTime now) {
+  bool isHandshakeStuck([DateTime? now]) {
     if (closed) {
       // intentionally closed: the run loop never re-dials
       return false;
@@ -169,6 +170,7 @@ abstract class BaseLink implements MagLink {
       // nothing sent yet: dial now
       return true;
     }
+    now ??= DateTime.now();
     // rate limit: at most one "SYN?" per handshake interval
     return now.difference(lastSent).inMilliseconds >=
         config.handshakeInterval * 1000;
@@ -178,7 +180,7 @@ abstract class BaseLink implements MagLink {
   /// re-connects when this is true. Each link type answers in its own
   /// terms - see the implementations in the subclasses.
   // protected
-  bool isSessionStale(DateTime now);
+  bool isSessionStale([DateTime? now]);
 
   /// Outbound packets deferred while re-handshaking; signed and sent
   /// once the handshake completes.

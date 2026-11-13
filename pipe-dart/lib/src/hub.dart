@@ -220,7 +220,7 @@ class MagHub {
   ///   * direct link - [DirectLink.reconnect] while the handshake is
   ///     unfinished (rate-limited "SYN?" retries), else
   ///     [DirectLink.heartbeat] when idle.
-  void keepAlive(DateTime now) {
+  void keepAlive([DateTime? now]) {
     for (var link in bridgeLinks.values) {
       if (link.needsReconnect(now)) {
         link.reconnect(now);

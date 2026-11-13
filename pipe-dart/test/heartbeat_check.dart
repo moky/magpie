@@ -74,13 +74,13 @@ Future<void> main() async {
 
   // B: recent send -> no ping
   conn.lastSendTime = DateTime.now();
-  if (conn.needsHeartbeat(DateTime.now())) conn.heartbeat(DateTime.now());
+  if (conn.needsHeartbeat()) conn.heartbeat();
   dg = await receive(server, const Duration(milliseconds: 300));
   check(dg == null, 'B: recent traffic -> no PING');
 
   // C: fresh connection (no timestamps) -> no ping
   var fresh = BridgeLink(client, (host: server.address, port: server.port), enigma: Enigma());
-  if (fresh.needsHeartbeat(DateTime.now())) fresh.heartbeat(DateTime.now());
+  if (fresh.needsHeartbeat()) fresh.heartbeat();
   dg = await receive(server, const Duration(milliseconds: 300));
   check(dg == null, 'C: no traffic yet -> no PING');
 
@@ -92,7 +92,7 @@ Future<void> main() async {
   check(fromServer != null, 'D: PONG delivered');
   conn.received(fromServer!.data);
   check(conn.lastReceivedTime != null, 'D: lastReceivedTime refreshed');
-  if (conn.needsHeartbeat(DateTime.now())) conn.heartbeat(DateTime.now());
+  if (conn.needsHeartbeat()) conn.heartbeat();
   dg = await receive(server, const Duration(milliseconds: 300));
   check(dg == null, 'D: PONG suppresses heartbeat');
 

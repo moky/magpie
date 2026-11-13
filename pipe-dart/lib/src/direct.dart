@@ -110,7 +110,7 @@ class DirectLink extends BaseLink with PayloadMixIn {
   /// The rate limit itself lives in [needsReconnect]; this only caps the
   /// attempt count at [Config.handshakeRetryLimit] - past it the link
   /// goes quiet and the app decides whether to drop it.
-  void reconnect(DateTime now) {
+  void reconnect([DateTime? now]) {
     if (_connectAttempts >= config.handshakeRetryLimit) {
       // give up: keep quiet, the upper layer decides
       return;
@@ -124,7 +124,7 @@ class DirectLink extends BaseLink with PayloadMixIn {
   /// handshook, the run loop heartbeats and a dead peer is the app
   /// layer's call.
   @override
-  bool isSessionStale(DateTime now) => false;
+  bool isSessionStale([DateTime? now]) => false;
 
   /// Idle-triggered heartbeat (docs/client.md §6): send a "PING" with
   /// the payload `{"time": ...}`. Always sends - gate the call with
@@ -133,9 +133,9 @@ class DirectLink extends BaseLink with PayloadMixIn {
   /// Direct packets carry no attachment (no shared secret); PONGs are
   /// neither awaited nor retransmitted.
   @override
-  void heartbeat(DateTime now) {
+  void heartbeat([DateTime? now]) {
+    now ??= DateTime.now();
     final request = {
-      'start_time': DateTime.now().millisecondsSinceEpoch / 1000.0, // for speed
       'time': now.millisecondsSinceEpoch / 1000.0,
     };
     sendPacket(packetFactory.ping(
@@ -153,8 +153,9 @@ class DirectLink extends BaseLink with PayloadMixIn {
     final observed = host.contains(':')
         ? '[$host]:$port'   // IPv6 literal
         : '$host:$port';
+    final now = DateTime.now();
     final response = {
-      'time': DateTime.now().millisecondsSinceEpoch / 1000.0,
+      'time': now.millisecondsSinceEpoch / 1000.0,
       'UDP': observed,
     };
     sendPacket(packetFactory.synAck(
@@ -170,8 +171,9 @@ class DirectLink extends BaseLink with PayloadMixIn {
     if (udp is String) {
       observedAddress = udp;
     }
+    final now = DateTime.now();
     final response = {
-      'time': DateTime.now().millisecondsSinceEpoch / 1000.0,
+      'time': now.millisecondsSinceEpoch / 1000.0,
     };
     sendPacket(packetFactory.ack(
       encodePayload(response),
@@ -199,8 +201,9 @@ class DirectLink extends BaseLink with PayloadMixIn {
   /// Reply "FIN!" to the peer's "FIN?" (minimal wave - the reverse
   /// close is up to the upper layer).
   void _replyFin(Magpie packet) {
+    final now = DateTime.now();
     final request = {
-      'time': DateTime.now().millisecondsSinceEpoch / 1000.0,
+      'time': now.millisecondsSinceEpoch / 1000.0,
     };
     sendPacket(packetFactory.finAck(
       encodePayload(request),

@@ -40,7 +40,7 @@ void main() async {
 
   // the run loop pattern (hub.keepAlive): reconnect while the handshake
   // is unfinished, heartbeat when idle after it completes
-  void keepAlive(DateTime now) {
+  void keepAlive([DateTime? now]) {
     if (link.needsReconnect(now)) {
       link.reconnect(now);
     } else if (link.needsHeartbeat(now)) {
@@ -80,7 +80,7 @@ void main() async {
 
   // E: keepAlive switches to heartbeat - fresh "ACK!" means no PING
   // yet, and never a "SYN?" again
-  keepAlive(DateTime.now());
+  keepAlive();
   drain(peer, counters);
   check(counters[1] == 0, 'E: fresh ACK! -> no PING yet');
   check(counters[0] == 5, 'E: ready -> no extra SYN? (got ${counters[0]})');
@@ -88,7 +88,7 @@ void main() async {
   // F: idle ready link -> PING (docs/client.md §6)
   link.lastReceivedTime = null;
   link.lastSendTime = DateTime.now().subtract(const Duration(seconds: 11));
-  keepAlive(DateTime.now());
+  keepAlive();
   drain(peer, counters);
   check(counters[1] == 1, 'F: idle -> PING sent (got ${counters[1]})');
 
@@ -96,7 +96,7 @@ void main() async {
   link.disconnect();
   drain(peer, counters);
   link.lastSendTime = DateTime.now().subtract(const Duration(seconds: 30));
-  keepAlive(DateTime.now());
+  keepAlive();
   drain(peer, counters);
   check(counters[0] == 5, 'G: closed link -> no re-dial (got ${counters[0]})');
   check(counters[1] == 1, 'G: closed link -> no PING (got ${counters[1]})');
