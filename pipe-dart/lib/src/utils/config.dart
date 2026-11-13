@@ -79,6 +79,11 @@ class Config {
   /// whether to drop it.
   int get handshakeRetryLimit => getInt('handshake_retry_limit', 5);
 
+  /// The upper bound for a link's deferred-packet queue: while the
+  /// handshake is still in progress, further packets are dropped
+  /// (sendPacket returns false) when the queue is full.
+  int get maxPendingPackets => getInt('max_pending_packets', 256);
+
   /// The record active timeout D in seconds (docs/client.md §6, §8):
   /// when no packet has been received for longer than this, the server
   /// record is likely gone - clean up the pipes and re-handshake;

@@ -15,11 +15,11 @@ import 'package:magpipe/magpipe.dart';
 
 /// the app's bridge pipe: receives the data flow from the peer
 class ChatPipe extends BridgePipe {
-  ChatPipe(super.connection, {required super.remote, required super.local});
+  ChatPipe(super.connection, {required super.target, required super.source});
 
   @override
   void processPacket(Packet packet) {
-    // answer "COPY" first, then observe via the factory's delegate
+    // answer "COPY" first, then observe via the shared delegate
     // (docs/client.md §4.2)
     super.processPacket(packet);
     // a message from the peer (A=0, D=1): print the payload
@@ -29,13 +29,13 @@ class ChatPipe extends BridgePipe {
   }
 }
 
-/// the app's pipe factory: plugged into the shared PipeExtensions hook
+/// the app's pipe factory: plugged into the shared MagpieExtensions hook
 class ChatPipeFactory extends PipeFactory {
   @override
   BridgePipe createBridgePipe(BridgeLink conn, {
-    required int remote,
-    required int local,
-  }) => ChatPipe(conn, remote: remote, local: local);
+    required int target,
+    required int source,
+  }) => ChatPipe(conn, target: target, source: source);
 }
 
 Future<void> main() async {
@@ -44,8 +44,8 @@ Future<void> main() async {
   const peer = 42;  // the peer's bid, announced out-of-band
 
   // 1. the hub binds one shared UDP socket for every connection
-  final hub = await MagHub.create();
-  sharedPipeExtensions.pipeFactory = ChatPipeFactory();
+  final hub = await MagHub.create(enigma: Enigma(), config: Config());
+  sharedMagpieExtensions.pipeFactory = ChatPipeFactory();
 
   // 2. connect to the relay server (B=1): the three-way handshake runs
   //    in the background until the link is [ready]
@@ -57,7 +57,7 @@ Future<void> main() async {
   }
   if (!bridge.ready) {
     print('no relay server on ${server.host}:${server.port} - start one first');
-    hub.socket.close();
+    hub.close();
     return;
   }
   print('bridge ready, bid = ${bridge.bid}');
@@ -74,5 +74,5 @@ Future<void> main() async {
   // ... keep the process alive to receive the peer's replies
   await Future.delayed(const Duration(seconds: 5));
   hub.disconnect(server);
-  hub.socket.close();
+  hub.close();
 }

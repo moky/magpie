@@ -41,7 +41,7 @@ import 'link.dart';
 import 'direct.dart';
 import 'pipe.dart';
 
-/// UDP hub: binds one shared socket and multiplexes every [MagLink]
+/// UDP hub: wraps one shared socket and multiplexes every [MagLink]
 /// registered on it.
 ///
 /// The hub runs no timers: call [MagHub.keepAlive] periodically from
@@ -50,49 +50,72 @@ import 'pipe.dart';
 ///
 /// Usage:
 /// ```
-/// var hub = await MagHub.create();
-/// sharedPipeExtensions.pipeFactory = PipeFactory();
+/// var enigma = Enigma();
+/// enigma.updateSecrets(secrets);
+/// var config = Config();
+/// var hub = MagHub(socket, enigma: enigma, config: config);  // or MagHub.create(...)
+/// sharedMagpieExtensions.pipeFactory = PipeFactory();
 /// var bridge = hub.connectBridge(server);  // bridge connection (B=1)
 /// var direct = hub.connect(peer);          // direct connection (B=0)
 /// ...
 /// hub.disconnect(remote);
+/// hub.close();
 /// ```
 ///
 /// Incoming datagrams are dispatched to the connection matching the
 /// sender's endpoint; datagrams from unregistered endpoints are dropped.
 class MagHub {
-  MagHub._(this.socket) {
+  /// Create the hub on a pre-bound [socket]: the app controls the
+  /// binding (e.g. a fixed port).
+  ///
+  /// [enigma] feeds the encrypted handshake and is shared by every
+  /// bridge link of this hub (docs/client.md §5.2) - build and load it
+  /// before creating the hub.
+  MagHub(this._socket, {
+    required Enigma enigma,
+    required Config config,
+  }) : _enigma = enigma, _config = config {
     // pump the shared socket: route each datagram to its connection
-    socket.listen(_onEvent);
+    _socket.listen(_onEvent);
   }
 
-  /// Create the hub: bind the shared UDP socket on [host]:[port]
-  /// (defaults: all IPv4 interfaces, ephemeral port).
-  static Future<MagHub> create({InternetAddress? host, int port = 0}) async {
-    return MagHub._(await RawDatagramSocket.bind(host ?? InternetAddress.anyIPv4, port));
-  }
-
-  /// The shared local UDP socket (bound once, used by all links).
-  final RawDatagramSocket socket;
-
-  /// All live bridge links (B=1), keyed by the relay server's endpoint.
-  final Map<SocketAddress, BridgeLink> bridgeLinks = {};
-
-  /// All live direct links (B=0), keyed by the peer's endpoint.
-  final Map<SocketAddress, DirectLink> directLinks = {};
+  final Config _config;
 
   /// The enigma shared by this hub's bridge links: its key table feeds
-  /// the encrypted handshake; the app loads it via `updateSecrets`.
-  final Enigma enigma = Enigma();
+  /// the encrypted handshake.
+  final Enigma _enigma;
+
+  /// The shared local UDP socket (bound once, used by all links).
+  final RawDatagramSocket _socket;
+
+  /// All live bridge links (B=1), keyed by the relay server's endpoint.
+  final Map<SocketAddress, BridgeLink> _bridgeLinks = {};
+
+  /// All live direct links (B=0), keyed by the peer's endpoint.
+  final Map<SocketAddress, DirectLink> _directLinks = {};
+
+  /// Create the hub: bind the shared UDP socket on [host]:[port]
+  /// (defaults: all IPv4 interfaces, ephemeral port). See the
+  /// [MagHub] constructor for [enigma].
+  static Future<MagHub> create({
+    InternetAddress? host,
+    int port = 0,
+    required Enigma enigma,
+    required Config config,
+  }) async => MagHub(
+    await RawDatagramSocket.bind(host ?? InternetAddress.anyIPv4, port),
+    enigma: enigma,
+    config: config,
+  );
 
   /// Register a direct link to the peer endpoint [remote] (B=0).
   /// Returns the existing link when that endpoint is already
   /// registered (idempotent).
   DirectLink connect(SocketAddress remote) {
-    var link = directLinks[remote];
+    var link = _directLinks[remote];
     if (link == null) {
-      link = DirectLink(socket, remote, enigma: enigma);
-      directLinks[remote] = link;
+      link = DirectLink(_socket, remote, enigma: _enigma, config: _config);
+      _directLinks[remote] = link;
       link.connect();  // send "SYN?" (stateless handshake)
     }
     return link;
@@ -102,10 +125,10 @@ class MagHub {
   /// the handshake. Returns the existing link when that endpoint is
   /// already registered (idempotent).
   BridgeLink connectBridge(SocketAddress remote) {
-    var link = bridgeLinks[remote];
+    var link = _bridgeLinks[remote];
     if (link == null) {
-      link = BridgeLink(socket, remote, enigma: enigma);
-      bridgeLinks[remote] = link;
+      link = BridgeLink(_socket, remote, enigma: _enigma, config: _config);
+      _bridgeLinks[remote] = link;
       link.connect();  // send "SYN?"
     }
     return link;
@@ -115,19 +138,34 @@ class MagHub {
   /// "FIN?" for a bridge connection). Returns the removed connection,
   /// or null when that endpoint is not registered.
   MagLink? disconnect(SocketAddress remote) {
-    MagLink? connection = directLinks.remove(remote);
-    connection ??= bridgeLinks.remove(remote);
-    if (connection == null) {
+    MagLink? link = _directLinks.remove(remote);
+    link ??= _bridgeLinks.remove(remote);
+    if (link == null) {
       return null;
     }
-    connection.disconnect();  // bridge: send "FIN?"; direct: stateless no-op
-    return connection;
+    link.disconnect();  // bridge: send "FIN?"; direct: stateless no-op
+    return link;
+  }
+
+  /// Close the hub: disconnect every registered link (bridge links send
+  /// their "FIN?" waves) and then close the shared socket. The hub is
+  /// empty afterwards; create a new one to continue.
+  void close() {
+    for (var link in _bridgeLinks.values) {
+      link.disconnect();
+    }
+    for (var link in _directLinks.values) {
+      link.disconnect();
+    }
+    _bridgeLinks.clear();
+    _directLinks.clear();
+    _socket.close();
   }
 
   /// Get the direct pipe to the peer [remote] (B=0): connect first,
   /// then return the pipe of the direct link.
   ///
-  /// Returns null when no [PipeFactory] is plugged via [PipeExtensions].
+  /// Returns null when no [PipeFactory] is plugged via [MagpieExtensions].
   MagPipe? getDirectPipe(SocketAddress remote) {
     final link = connect(remote);
     return link.getPipe(0);
@@ -141,7 +179,7 @@ class MagHub {
   /// `accept([target])` is sent automatically to permit the target,
   /// then the pipe is looked up again.
   ///
-  /// Returns null when no [PipeFactory] is plugged via [PipeExtensions],
+  /// Returns null when no [PipeFactory] is plugged via [MagpieExtensions],
   /// or the link is not ready yet (no "ACK!" received).
   MagPipe? getBridgePipe(SocketAddress remote, int target) {
     final link = connectBridge(remote);
@@ -221,14 +259,14 @@ class MagHub {
   ///     unfinished (rate-limited "SYN?" retries), else
   ///     [DirectLink.heartbeat] when idle.
   void keepAlive([DateTime? now]) {
-    for (var link in bridgeLinks.values) {
+    for (var link in _bridgeLinks.values) {
       if (link.needsReconnect(now)) {
         link.reconnect(now);
       } else if (link.needsHeartbeat(now)) {
         link.heartbeat(now);
       }
     }
-    for (var link in directLinks.values) {
+    for (var link in _directLinks.values) {
       if (link.needsReconnect(now)) {
         link.reconnect(now);
       } else if (link.needsHeartbeat(now)) {
@@ -244,9 +282,9 @@ class MagHub {
       return;
     }
     Datagram? dg;
-    while ((dg = socket.receive()) != null) {
+    while ((dg = _socket.receive()) != null) {
       final remote = (host: dg!.address, port: dg.port);
-      (bridgeLinks[remote] ?? directLinks[remote])?.received(dg.data);
+      (_bridgeLinks[remote] ?? _directLinks[remote])?.received(dg.data);
     }
   }
 }

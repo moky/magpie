@@ -77,7 +77,7 @@ class HkdfEnc {
 
   /// Build an encryption context with fresh random salt/nonce
   /// (server side).
-  static HkdfEnc create(String key, {required int bid}) {
+  factory HkdfEnc.create(String key, {required int bid}) {
     final random = Random.secure();
     final salt = Uint8List(16);
     for (var i = 0; i < salt.length; ++i) {

@@ -4,6 +4,7 @@ import 'package:magpie_bridge/factory.dart';
 import 'package:magpie_bridge/protocol.dart';
 
 import 'package:magpipe/src/direct.dart';
+import 'package:magpipe/src/utils/config.dart';
 import 'package:magpipe/src/utils/enigma.dart';
 
 int failed = 0;
@@ -34,6 +35,7 @@ void main() async {
   final link = DirectLink(
     client, (host: peer.address, port: peer.port),
     enigma: Enigma(),
+    config: Config(),
   );
   // counters[0] = "SYN?" sent, counters[1] = "PING" sent
   final counters = [0, 0];

@@ -37,6 +37,7 @@ import 'package:magpie_bridge/protocol.dart';
 import 'utils/config.dart';
 import 'utils/enigma.dart';
 
+import 'ext.dart';
 import 'pipe.dart';
 
 abstract interface class MagLink {
@@ -61,9 +62,19 @@ abstract interface class MagLink {
 }
 
 abstract class BaseLink implements MagLink {
-  BaseLink(this.socket, this.remoteAddress, {required this.enigma});
+  BaseLink(this.socket, this.remoteAddress, {
+    required this.enigma,
+    required this.config,
+  });
+
+  // protected
+  final Config config;
+
+  // protected
+  final Enigma enigma;
 
   /// The bound local UDP socket.
+  // protected
   final RawDatagramSocket socket;
 
   /// The remote endpoint of this connection (IP address + UDP port):
@@ -82,25 +93,13 @@ abstract class BaseLink implements MagLink {
   /// The peer's UDP port.
   int get port => remoteAddress.port;
 
-  @override
-  bool ready = false;
-
   /// Whether [disconnect] was called (intentional close): the run loop
   /// never re-dials a closed link. Cleared by [connect] on re-open.
-  bool closed = false;
-
-  /// The configuration (handshake parameters, etc.); the app loads
-  /// values via `config.update({...})`.
-  final Config config = Config();
-
-  /// The enigma for the encrypted handshake: `decrypt` derives the AES
-  /// key from the ikm stored under the key name carried by the "SYN!"
-  /// reply.
-  final Enigma enigma;
+  bool get closed;
 
   /// The session secret bound after the "SYN!" (null = not yet);
   /// packets bound for the server are signed with it.
-  Uint8List? secret;
+  Uint8List? get secret;
 
   /// Time of the last outgoing datagram (refreshed by [send]: data,
   /// handshake waves and heartbeats all count).
@@ -186,10 +185,6 @@ abstract class BaseLink implements MagLink {
   /// once the handshake completes.
   final List<Magpie> _pendingPackets = [];
 
-  /// Upper bound for [_pendingPackets]: further packets are dropped
-  /// (sendPacket returns false) while the queue is full.
-  static int maxPendingPackets = 256;
-
   /// Send the packets deferred while re-handshaking.
   void drain() {
     final deferred = List.of(_pendingPackets);
@@ -203,19 +198,23 @@ abstract class BaseLink implements MagLink {
   /// exact bytes a previous sendPacket would have put on the wire.
   // protected
   bool packAndSend(Magpie packet) {
+    final delegate = sharedMagpieExtensions.delegate;
+    final pipe = getPipe(packet.target);
     final data = packet.pack();
     final size = socket.send(data, host, port);
     if (size != data.length) {
+      delegate?.onPacketFailed(packet, pipe, this);
       return false;
     }
     lastSendTime = DateTime.now();
+    delegate?.onPacketSent(packet, pipe, this);
     return true;
   }
 
   /// Pack and send the datagram to the remote endpoint, refreshing
   /// the last-send time for the heartbeat idle check. Data commands
   /// sent while the handshake is still in progress are deferred to
-  /// [_pendingPackets] (bounded by [maxPendingPackets]).
+  /// [_pendingPackets] (bounded by [Config.maxPendingPackets]).
   bool sendPacket(Magpie packet, {
     bool encryptedMode = true,
   }) {
@@ -249,8 +248,12 @@ abstract class BaseLink implements MagLink {
       return packAndSend(packet);
     } else if (command != Command.PING && command != Command.PONG) {
       // waiting for handshake (bounded: keep the newest packets)
-      if (_pendingPackets.length >= maxPendingPackets) {
-        _pendingPackets.removeAt(0);
+      if (_pendingPackets.length >= config.maxPendingPackets) {
+        // queue full: drop the oldest and notify the app
+        final delegate = sharedMagpieExtensions.delegate;
+        final dropped = _pendingPackets.removeAt(0);
+        final pipe = getPipe(dropped.target);
+        delegate?.onPacketFailed(dropped, pipe, this);
       }
       _pendingPackets.add(packet);
     }
@@ -270,6 +273,18 @@ abstract class BaseLink implements MagLink {
 
   Packet? parse(Uint8List data);
 
-  void processPacket(Packet packet);
+  /// Dispatch a received packet: the pipe answers PONG/COPY first, then
+  /// the app delegate observes the packet.
+  ///
+  /// [pipe] may be null when the packet arrives before its pipe exists
+  /// (e.g. handshake waves) - the app distinguishes via this link.
+  void processPacket(Packet packet) {
+    // 1. call pipe to reply PONG/COPY
+    final pipe = getPipe(packet.source);
+    pipe?.processPacket(packet);
+    // 2. call app to process the payload
+    final delegate = sharedMagpieExtensions.delegate;
+    delegate?.onPacketReceived(packet, pipe, this);
+  }
 
 }

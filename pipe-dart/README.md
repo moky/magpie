@@ -20,7 +20,8 @@ connections.
   registered on it (inbound datagrams are routed by remote endpoint). The
   hub runs no timers: call `hub.keepAlive(now)` periodically (e.g. once a
   second on your own timer) to heartbeat idle links and re-connect dead
-  ones (docs/client.md §6, §8).
+  ones (docs/client.md §6, §8). `hub.close()` disconnects everything and
+  closes the shared socket.
 - **BridgeLink / DirectLink**: connection to the relay
   server (B=1, with the SYN?/SYN!/ACK! handshake, heartbeat and enigma)
   or directly to a peer (B=0, stateless).
@@ -32,10 +33,9 @@ connections.
 - **Receiving**: the default `processPacket` answers "COPY" to data
   packets and "PONG" to heartbeats; override it on your pipe subclass
   to plug in your own dedup, fragment reassembly and delivery.
-- **Observing**: a `MagPipeDelegate` receives every packet forwarded
-  through the pipes - set it on the registered `PipeFactory`
-  (`pipeDelegate`) without subclassing anything, or override the
-  `delegate` getter on your pipe subclass for a per-pipe observer.
+- **Observing**: a `MagpieDelegate` receives every packet received
+  through the link - handshake waves included; set it on the shared
+  `MagpieExtensions` (`delegate`) without subclassing anything.
 
 See `docs/protocol.md` in the Magpie Bridge repository for the wire
 format and `docs/client.md` for the client behaviour.
@@ -43,11 +43,15 @@ format and `docs/client.md` for the client behaviour.
 ## Usage
 
 ```dart
-var hub = await MagHub.create();
+var enigma = Enigma();  // feeds the encrypted handshake
+var config = Config();  // timing knobs (heartbeat/handshake intervals, ...)
 
-// pipes are built by the registered factory (required); the factory
-// also carries the optional packet observer (pipeDelegate):
-sharedPipeExtensions.pipeFactory = PipeFactory();
+var hub = await MagHub.create(enigma: enigma, config: config);
+
+// pipes are built by the registered factory (required); the delegate
+// observes every packet received through the links (optional):
+sharedMagpieExtensions.pipeFactory = PipeFactory();
+sharedMagpieExtensions.delegate = MyDelegate();
 
 // bridge connection to the relay server (B=1):
 var bridge = hub.connectBridge(server);
@@ -70,6 +74,9 @@ hub.keepAlive(DateTime.now());
 
 ...
 hub.disconnect(server);
+
+// done: disconnects every link and closes the shared socket
+hub.close();
 ```
 
 ## License

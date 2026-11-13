@@ -38,6 +38,7 @@ import 'utils/coding.dart';
 import 'utils/enigma.dart';
 import 'utils/payload.dart';
 
+import 'ext.dart';
 import 'link.dart';
 import 'pipe.dart';
 
@@ -45,11 +46,28 @@ import 'pipe.dart';
 /// command handling are implemented; data packets are answered with
 /// "COPY" and handed to the pipe of the source peer.
 class BridgeLink extends BaseLink with PayloadMixIn {
-  BridgeLink(super.socket, super.remoteAddress, {required super.enigma});
+  BridgeLink(super.socket, super.remoteAddress, {
+    required super.enigma,
+    required super.config,
+  });
 
   /// The bid assigned by the server after the handshake (0 = not yet).
-  int bid = 0;
+  int get bid => _bid;
+  int _bid = 0;
 
+  @override
+  bool get ready => _ready;
+  bool _ready = false;
+
+  @override
+  bool get closed => _closed;
+  bool _closed = false;
+
+  @override
+  Uint8List? get secret => _secret;
+  Uint8List? _secret;
+
+  // protected
   String get className {
     String name = 'BridgeLink';
     assert(() {
@@ -63,7 +81,7 @@ class BridgeLink extends BaseLink with PayloadMixIn {
   String toString() => '$className{bid=$bid, '
       'remote=$remoteAddress, observed=$observedAddress}';
 
-  final packetFactory = BridgePacketFactory();
+  final _factory = BridgePacketFactory();
 
   /// The bridge pipes for data exchange, keyed by the peer's bid.
   final Map<int, BridgePipe> _bridgePipes = {};
@@ -96,7 +114,7 @@ class BridgeLink extends BaseLink with PayloadMixIn {
   /// (docs/client.md §5.2).
   @override
   void connect([DateTime? now]) {
-    closed = false;  // (re-)open: re-grant the retry budget
+    _closed = false;  // (re-)open: re-grant the retry budget
     now ??= DateTime.now();
     final request = {
       'enigmas': enigma.keyNames,
@@ -104,7 +122,7 @@ class BridgeLink extends BaseLink with PayloadMixIn {
     };
     // "SYN?" carries no attachment, even when re-handshaking with a
     // stale secret bound (docs/protocol.md §5.1)
-    sendPacket(packetFactory.syn(
+    sendPacket(_factory.syn(
       padPayload(request, config: config),
       source: 0,
     ), encryptedMode: false);
@@ -113,8 +131,8 @@ class BridgeLink extends BaseLink with PayloadMixIn {
   /// Send a "FIN?" wave to the server: close the bridge connection.
   @override
   void disconnect([DateTime? now]) {
-    ready = false;
-    closed = true;  // intentional close: the run loop stops re-dialing
+    _ready = false;
+    _closed = true;  // intentional close: the run loop stops re-dialing
     final source = bid;
     if (source == 0) {
       return;
@@ -123,7 +141,7 @@ class BridgeLink extends BaseLink with PayloadMixIn {
     final request = {
       'time': now.millisecondsSinceEpoch / 1000.0,
     };
-    sendPacket(packetFactory.fin(
+    sendPacket(_factory.fin(
       encodePayload(request),
       source: source,
     ));
@@ -167,9 +185,9 @@ class BridgeLink extends BaseLink with PayloadMixIn {
     _connectAttempts += 1;
     // clean up the stale session: pipes and permits died with the
     // server record
-    ready = false;
-    bid = 0;
-    secret = null;
+    _ready = false;
+    _bid = 0;
+    _secret = null;
     _bridgePipes.clear();
     _serverPipe = null;
     _allowAll = false;
@@ -199,7 +217,7 @@ class BridgeLink extends BaseLink with PayloadMixIn {
     final request = {
       'time': now.millisecondsSinceEpoch / 1000.0,
     };
-    sendPacket(packetFactory.ping(
+    sendPacket(_factory.ping(
       encodePayload(request),
       source: source,
     ));
@@ -246,8 +264,8 @@ class BridgeLink extends BaseLink with PayloadMixIn {
       assert(false, 'decryption failed: $packet');
       return;
     }
-    secret = messageKey;
-    bid = target;  // commit: trusted only after the decryption checks
+    _secret = messageKey;
+    _bid = target;  // commit: trusted only after the decryption checks
 
     // answer "ACK!": the handshake parameters echo back as-is
     final now = DateTime.now();
@@ -257,13 +275,13 @@ class BridgeLink extends BaseLink with PayloadMixIn {
       'token': token,
       'time': now.millisecondsSinceEpoch / 1000.0,
     };
-    final ack = packetFactory.ack(
+    final ack = _factory.ack(
       padPayload(response, config: config),
       source: target,
     );
     _lastAck = ack;
     sendPacket(ack, encryptedMode: bundle is Map);
-    ready = true;
+    _ready = true;
     _connectAttempts = 0;  // handshake complete: retry counter resets
     // the pipe to the server itself (bid 0): (re)created on every
     // handshake completion, so PONG/FAIL/DONE have a pipe right away
@@ -289,7 +307,7 @@ class BridgeLink extends BaseLink with PayloadMixIn {
     final request = {
       'time': now.millisecondsSinceEpoch / 1000.0,
     };
-    sendPacket(packetFactory.noop(
+    sendPacket(_factory.noop(
       encodePayload(request),
       source: source,
     ));
@@ -388,8 +406,8 @@ class BridgeLink extends BaseLink with PayloadMixIn {
       'time': now.millisecondsSinceEpoch / 1000.0,
     };
     final packet = command == Command.ACPT
-        ? packetFactory.acpt(encodePayload(request), source: local)
-        : packetFactory.deny(encodePayload(request), source: local);
+        ? _factory.acpt(encodePayload(request), source: local)
+        : _factory.deny(encodePayload(request), source: local);
     sendPacket(packet);
     return true;
   }
@@ -406,15 +424,15 @@ class BridgeLink extends BaseLink with PayloadMixIn {
   static final List<int> PERMIT_ALL = [1, 2, 3];
 
   /// Build a pipe for the peer [remote] bound to this connection: the
-  /// application must plug a custom [PipeFactory] via [PipeExtensions].
+  /// application must plug a custom [PipeFactory] via [MagpieExtensions].
   BridgePipe? _newPipe(int remote) {
-    final pipeFactory = sharedPipeExtensions.pipeFactory;
-    return pipeFactory?.createBridgePipe(this, remote: remote, local: bid);
+    final pipeFactory = sharedMagpieExtensions.pipeFactory;
+    return pipeFactory?.createBridgePipe(this, target: remote, source: bid);
   }
 
   @override
   Packet? parse(Uint8List data) {
-    final packet = packetFactory.parse(data);
+    final packet = _factory.parse(data);
     if (packet == null) {
       return null;  // silently drop malformed datagrams
     } else if (packet.bid != 1) {
@@ -453,21 +471,17 @@ class BridgeLink extends BaseLink with PayloadMixIn {
     switch (packet.command) {
       case Command.SYN_ACK:
         _handleSynAck(packet);
-        return;
+        break;
       case Command.FIN_ACK:
         _handleFinAck(packet);
-        return;
+        break;
       case Command.FAIL:
         // "connection unconfirmed": resend the last "ACK!" (idempotent);
         // everything else is routed to the pipe for the upper layer
         _handleFail(packet);
         break;
     }
-    // hand FAIL/DONE/DATA/COPY/PONG to the pipe: dequeue the sending
-    // queue on COPY, fail it on FAIL, merge fragments on DATA, measure
-    // RTT on PONG, etc.
-    final pipe = getPipe(packet.source);
-    pipe?.processPacket(packet);
+    super.processPacket(packet);
   }
 
   @override

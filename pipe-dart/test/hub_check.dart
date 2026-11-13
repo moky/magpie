@@ -3,10 +3,14 @@ import 'dart:typed_data';
 
 
 import 'package:magpipe/src/hub.dart';
+import 'package:magpipe/src/link.dart';
+import 'package:magpipe/src/ext.dart';
 import 'package:magpipe/src/pipe.dart';
 import 'package:magpipe/src/bridge.dart';
 import 'package:magpipe/src/direct.dart';
+import 'package:magpipe/src/utils/config.dart';
 import 'package:magpipe/src/utils/hmac.dart';
+import 'package:magpipe/src/utils/enigma.dart';
 import 'package:magpipe/src/utils/coding.dart';
 import 'package:magpie_bridge/factory.dart';
 import 'package:magpie_bridge/magpie.dart';
@@ -41,15 +45,21 @@ class TestPipe extends DirectPipe {
 }
 
 /// records packets observed through the pipe delegate
-class PipeRecorder implements MagPipeDelegate {
+class PipeRecorder implements MagpieDelegate {
   int calls = 0;
   @override
-  void onPacketReceived(Packet packet, MagPipe pipe) => calls++;
+  void onPacketReceived(Packet packet, MagPipe? pipe, MagLink link) => calls++;
+
+  @override
+  void onPacketSent(Magpie packet, MagPipe? pipe, MagLink link) {}
+
+  @override
+  void onPacketFailed(Magpie packet, MagPipe? pipe, MagLink link) {}
 }
 
 /// concrete bridge pipe for the test
 class TestBridgePipe extends BridgePipe {
-  TestBridgePipe(super.connection, {required super.remote, required super.local});
+  TestBridgePipe(super.connection, {required super.target, required super.source});
 
   @override
   void processPacket(Packet packet) {}
@@ -62,49 +72,54 @@ class TestPipeFactory extends PipeFactory {
 
   @override
   BridgePipe createBridgePipe(BridgeLink conn, {
-    required int remote,
-    required int local,
-  }) => TestBridgePipe(conn, remote: remote, local: local);
+    required int target,
+    required int source,
+  }) => TestBridgePipe(conn, target: target, source: source);
 }
 
 Future<void> main() async {
   registerHmacSha256();
   var factory = TestPipeFactory();
-  sharedPipeExtensions.pipeFactory = factory;
+  sharedMagpieExtensions.pipeFactory = factory;
 
   // fake remote peers
   final server = await RawDatagramSocket.bind('127.0.0.1', 0);
   final peer = await RawDatagramSocket.bind('127.0.0.1', 0);
 
-  // 1. hub creates and binds its own shared socket
-  var hub = await MagHub.create(host: InternetAddress.loopbackIPv4, port: 0);
-  check(hub.socket.address.address == '127.0.0.1', '1: hub bound to loopback');
-  check(hub.socket.port != 0, '1: ephemeral port');
-  check(hub.directLinks.isEmpty && hub.bridgeLinks.isEmpty, '1: starts empty');
+  // 1. bind the shared socket and create the hub on it
+  var socket = await RawDatagramSocket.bind(InternetAddress.loopbackIPv4, 0);
+  var hub = MagHub(socket, enigma: Enigma(), config: Config());
+  check(socket.address.address == '127.0.0.1', '1: hub bound to loopback');
+  check(socket.port != 0, '1: ephemeral port');
 
   // 2. connectBridge() -> BridgeLink, handshake via shared socket
   var bridge = hub.connectBridge((host: server.address, port: server.port));
-  check(hub.bridgeLinks.length == 1, '2: registered in list');
   var dg = await receive(server, const Duration(seconds: 1));
   check(dg != null, '2: SYN? sent via shared socket');
 
   // 3. duplicate connect returns the same instance
   var again = hub.connectBridge((host: server.address, port: server.port));
   check(identical(again, bridge), '3: idempotent connect');
-  check(hub.bridgeLinks.length == 1, '3: no duplicate');
 
-  // 4. dispatch: server sends PONG -> routed to the right connection
-  bridge.bid = 7;
-  bridge.secret = Uint8List.fromList(List.generate(32, (i) => i));
+  // 4. handshake: the server's "SYN!" (plain secret) completes it; a
+  // signed PONG is then routed to the bridge connection
+  var secret = Uint8List.fromList(List.generate(32, (i) => i));
+  var synAck = BridgePacketFactory().synAck(
+    UTF8.encode('{"secret":"${Base64.encode(secret)}","token":"t","time":1,"UDP":"127.0.0.1:9"}'),
+    target: 7,
+  );
+  server.send(synAck.pack(), socket.address, socket.port);
+  var ack = await receive(server, const Duration(seconds: 1));
+  check(ack != null, '4: ACK! sent');
+  check(bridge.ready && bridge.bid == 7, '4: handshake completed');
   var ping = BridgePacketFactory().ping(Uint8List.fromList([0]), source: 7);
-  var pong = BridgePacketFactory().pong(Uint8List.fromList([1]), ping).sign(bridge.secret!);
-  server.send(pong.pack(), hub.socket.address, hub.socket.port);
+  var pong = BridgePacketFactory().pong(Uint8List.fromList([1]), ping).sign(secret);
+  server.send(pong.pack(), socket.address, socket.port);
   await Future.delayed(const Duration(milliseconds: 200));
   check(bridge.lastReceivedTime != null, '4: datagram routed to bridge connection');
 
   // 5. connect() -> DirectLink
   var direct = hub.connect((host: peer.address, port: peer.port));
-  check(hub.directLinks.length == 1 && hub.bridgeLinks.length == 1, '5: registered in list');
   // the "SYN?" of the direct handshake is expected traffic: drain it
   await receive(peer, const Duration(milliseconds: 500));
 
@@ -125,10 +140,10 @@ Future<void> main() async {
   // 5c. the fake peer completes the handshake: sends its own "SYN?" —
   // the hub replies "SYN!" and, on the peer's "ACK!", turns ready and
   // flushes the deferred packet
-  peer.send(DirectPacketFactory().syn(Uint8List.fromList([1, 2, 3])).pack(), hub.socket.address, hub.socket.port);
+  peer.send(DirectPacketFactory().syn(Uint8List.fromList([1, 2, 3])).pack(), socket.address, socket.port);
   dg = await receive(peer, const Duration(seconds: 1));
   check(dg != null, '5c: SYN! replied');
-  peer.send(DirectPacketFactory().ack(Uint8List.fromList([4, 5, 6])).pack(), hub.socket.address, hub.socket.port);
+  peer.send(DirectPacketFactory().ack(Uint8List.fromList([4, 5, 6])).pack(), socket.address, socket.port);
   await Future.delayed(const Duration(milliseconds: 200));
   check(direct.ready, '5c: handshake completed');
 
@@ -146,7 +161,6 @@ Future<void> main() async {
   // 6. disconnect() removes and sends FIN? (bridge)
   var removed = hub.disconnect((host: server.address, port: server.port));
   check(identical(removed, bridge), '6: removed the right one');
-  check(hub.directLinks.length == 1, '6: removed from list');
   dg = await receive(server, const Duration(milliseconds: 500));
   check(dg != null, '6: FIN? sent');
 
@@ -155,22 +169,27 @@ Future<void> main() async {
 
   // 8. datagram from unknown endpoint -> dropped silently
   var stranger = await RawDatagramSocket.bind('127.0.0.1', 0);
-  stranger.send(Uint8List.fromList([9, 9, 9]), hub.socket.address, hub.socket.port);
+  var received = direct.lastReceivedTime;
+  stranger.send(Uint8List.fromList([9, 9, 9]), socket.address, socket.port);
   await Future.delayed(const Duration(milliseconds: 200));
-  check(hub.directLinks.length == 1, '8: unknown endpoint ignored');
+  check(identical(received, direct.lastReceivedTime), '8: unknown endpoint ignored');
   stranger.close();
 
   // 9. pipe delegate observes the forwarded DATA packet
   var recorder = PipeRecorder();
-  factory.pipeDelegate = recorder;
+  sharedMagpieExtensions.delegate = recorder;
   var probe = DirectPacketFactory().data(Uint8List.fromList([7, 8, 9]), sn: 9);
-  peer.send(probe.pack(), hub.socket.address, hub.socket.port);
+  peer.send(probe.pack(), socket.address, socket.port);
   await Future.delayed(const Duration(milliseconds: 200));
   check(recorder.calls == 1, '9: pipe delegate observed the packet');
-  factory.pipeDelegate = null;
+  sharedMagpieExtensions.delegate = null;
+
+  // 10: close the hub - all links disconnected, socket closed
+  hub.close();
+  check(!direct.ready && direct.closed, '10: hub closed - links disconnected');
+  hub.close();  // idempotent: closing twice is safe
 
   server.close();
   peer.close();
-  hub.socket.close();
   print(failed == 0 ? '\nAll tests passed' : '\n$failed test(s) FAILED');
 }

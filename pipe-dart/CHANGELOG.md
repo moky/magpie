@@ -1,3 +1,18 @@
+## 0.3.5
+
+- `MagpieDelegate` (was `MagPipeDelegate`): the app observer now sees
+  every packet received through the link - handshake waves included;
+  `pipe` is null for packets arriving before their pipe exists.
+- `MagpieExtensions` (was `PipeExtensions`): holds the pipe factory and
+  the delegate - `PipeFactory` no longer does.
+- `MagHub`: public constructor - inject a pre-bound socket, an enigma
+  and the config; `socket`/`enigma`/link maps are private now.
+- `MagHub.close()`: disconnects every registered link (FIN? waves) and
+  closes the shared socket; idempotent.
+- Breaking: `BridgePipe` constructor parameters renamed remote/local
+  to target/source; `maxPendingPackets` is a Config knob now (was a
+  static field on BaseLink).
+
 ## 0.3.4
 
 - `keepAlive(now)` reworked: re-connects stuck handshakes (rate-limited

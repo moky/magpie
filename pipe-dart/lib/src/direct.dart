@@ -35,6 +35,7 @@ import 'package:magpie_bridge/factory.dart';
 
 import 'utils/payload.dart';
 
+import 'ext.dart';
 import 'link.dart';
 import 'pipe.dart';
 
@@ -47,8 +48,24 @@ import 'pipe.dart';
 /// (unlike the bridge link - its server is a long-lived public target,
 /// hence the encrypted handshake there).
 class DirectLink extends BaseLink with PayloadMixIn {
-  DirectLink(super.socket, super.remoteAddress, {required super.enigma});
+  DirectLink(super.socket, super.remoteAddress, {
+    required super.enigma,
+    required super.config,
+  });
 
+  @override
+  bool get ready => _ready;
+  bool _ready = false;
+
+  @override
+  bool get closed => _closed;
+  bool _closed = false;
+
+  @override
+  Uint8List? get secret => _secret;
+  Uint8List? _secret;
+
+  // protected
   String get className {
     String name = 'DirectLink';
     assert(() {
@@ -62,7 +79,7 @@ class DirectLink extends BaseLink with PayloadMixIn {
   String toString() => '$className{'
       'remote=$remoteAddress, observed=$observedAddress}';
 
-  final packetFactory = DirectPacketFactory();
+  final _factory = DirectPacketFactory();
 
   DirectPipe? _directPipe;
 
@@ -75,7 +92,7 @@ class DirectLink extends BaseLink with PayloadMixIn {
   /// simultaneous open converges.
   @override
   void connect([DateTime? now]) {
-    closed = false;  // (re-)open: re-grant the retry budget
+    _closed = false;  // (re-)open: re-grant the retry budget
     now ??= DateTime.now();
     final request = {
       'time': now.millisecondsSinceEpoch / 1000.0,
@@ -83,7 +100,7 @@ class DirectLink extends BaseLink with PayloadMixIn {
     // the pipe to the peer: created at dial time (initiator role), so
     // the app can fire early - packets are queued until ready
     _directPipe ??= _newPipe();
-    sendPacket(packetFactory.syn(
+    sendPacket(_factory.syn(
       encodePayload(request),
     ));
   }
@@ -92,13 +109,13 @@ class DirectLink extends BaseLink with PayloadMixIn {
   /// (docs/workflow.md §2.4).
   @override
   void disconnect([DateTime? now]) {
-    ready = false;
-    closed = true;  // intentional close: the run loop stops re-dialing
+    _ready = false;
+    _closed = true;  // intentional close: the run loop stops re-dialing
     now ??= DateTime.now();
     final request = {
       'time': now.millisecondsSinceEpoch / 1000.0,
     };
-    sendPacket(packetFactory.fin(
+    sendPacket(_factory.fin(
       encodePayload(request),
     ));
   }
@@ -138,7 +155,7 @@ class DirectLink extends BaseLink with PayloadMixIn {
     final request = {
       'time': now.millisecondsSinceEpoch / 1000.0,
     };
-    sendPacket(packetFactory.ping(
+    sendPacket(_factory.ping(
       encodePayload(request),
     ));
   }
@@ -158,7 +175,7 @@ class DirectLink extends BaseLink with PayloadMixIn {
       'time': now.millisecondsSinceEpoch / 1000.0,
       'UDP': observed,
     };
-    sendPacket(packetFactory.synAck(
+    sendPacket(_factory.synAck(
       encodePayload(response),
     ));
   }
@@ -175,10 +192,10 @@ class DirectLink extends BaseLink with PayloadMixIn {
     final response = {
       'time': now.millisecondsSinceEpoch / 1000.0,
     };
-    sendPacket(packetFactory.ack(
+    sendPacket(_factory.ack(
       encodePayload(response),
     ));
-    ready = true;
+    _ready = true;
     _connectAttempts = 0;  // handshake complete: retry counter resets
 
     // flush the packets the app fired before the handshake completed
@@ -187,7 +204,7 @@ class DirectLink extends BaseLink with PayloadMixIn {
 
   /// The peer's "ACK!" received (responder side): handshake complete.
   void _handleAck(Magpie packet) {
-    ready = true;
+    _ready = true;
     _connectAttempts = 0;  // handshake complete: retry counter resets
     // the pipe to the peer: created when the handshake completes
     // (responder role) - the initiator dials first, the responder's
@@ -200,27 +217,27 @@ class DirectLink extends BaseLink with PayloadMixIn {
 
   /// Reply "FIN!" to the peer's "FIN?" (minimal wave - the reverse
   /// close is up to the upper layer).
-  void _replyFin(Magpie packet) {
+  void _handleFin(Magpie packet) {
     final now = DateTime.now();
     final request = {
       'time': now.millisecondsSinceEpoch / 1000.0,
     };
-    sendPacket(packetFactory.finAck(
+    sendPacket(_factory.finAck(
       encodePayload(request),
       packet,
     ));
   }
 
   /// Build a pipe bound to this connection: the application must plug
-  /// a custom [PipeFactory] via [PipeExtensions].
+  /// a custom [PipeFactory] via [MagpieExtensions].
   DirectPipe? _newPipe() {
-    final pipeFactory = sharedPipeExtensions.pipeFactory;
+    final pipeFactory = sharedMagpieExtensions.pipeFactory;
     return pipeFactory?.createDirectPipe(this);
   }
 
   @override
   Packet? parse(Uint8List data) {
-    final packet = packetFactory.parse(data);
+    final packet = _factory.parse(data);
     if (packet == null) {
       return null;  // silently drop malformed datagrams
     } else if (packet.bid != 0) {
@@ -235,24 +252,20 @@ class DirectLink extends BaseLink with PayloadMixIn {
     switch (packet.command) {
       case Command.SYN:
         _handleSyn(packet);
-        return;
+        break;
       case Command.SYN_ACK:
         _handleSynAck(packet);
-        return;
+        break;
       case Command.ACK:
         _handleAck(packet);
-        return;
+        break;
       case Command.FIN:
         // the peer is closing: reply "FIN!" (minimal wave - the reverse
         // close is up to the upper layer)
-        _replyFin(packet);
-        return;
+        _handleFin(packet);
+        break;
     }
-    // hand DATA/COPY/PONG to the pipe: dequeue the sending
-    // queue on COPY, merge fragments on DATA, measure RTT
-    // on PONG, etc.
-    final pipe = getPipe(0);
-    pipe?.processPacket(packet);
+    super.processPacket(packet);
   }
 
   @override

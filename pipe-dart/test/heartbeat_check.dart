@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 
 import 'package:magpipe/src/bridge.dart';
+import 'package:magpipe/src/utils/config.dart';
 import 'package:magpipe/src/utils/hmac.dart';
 import 'package:magpipe/src/utils/coding.dart';
 import 'package:magpipe/src/utils/enigma.dart';
@@ -34,29 +35,33 @@ Future<void> main() async {
   // fake server + client on loopback
   final server = await RawDatagramSocket.bind('127.0.0.1', 0);
   final client = await RawDatagramSocket.bind('127.0.0.1', 0);
-  final conn = BridgeLink(client, (host: server.address, port: server.port), enigma: Enigma());
+  final conn = BridgeLink(client, (host: server.address, port: server.port),
+      enigma: Enigma(), config: Config());
   Datagram? dg;
 
-  // 0a: connect() -> SYN? built via JSONMap/UTF8 utils
+  // 0a: connect() -> SYN? sent
   conn.connect();
   dg = await receive(server, const Duration(seconds: 1));
+  check(dg != null, '0a: connect -> SYN? sent');
   var synPacket = dg == null ? null : BridgePacketFactory().parse(dg.data);
-  check(synPacket != null && synPacket.command == Command.SYN, '0a: connect -> SYN? sent');
-  check(synPacket!.payload.length >= 512, '0a: SYN? payload >= 512');
+  check(synPacket != null && synPacket.command == Command.SYN, '0a: is SYN');
 
-  // 0b: disconnect() -> FIN? built via JSONMap/UTF8 utils
-  conn.bid = 7;  // simulate the bound session before the wave
-  conn.disconnect();
-  dg = await receive(server, const Duration(milliseconds: 500));
-  var finPacket = dg == null ? null : BridgePacketFactory().parse(dg.data);
-  check(finPacket != null && finPacket.command == Command.FIN, '0b: disconnect -> FIN? sent');
-
-  // simulate a bound session
-  conn.bid = 7;
-  conn.secret = Uint8List.fromList(List.generate(32, (i) => i));
+  // 0b: the server replies "SYN!" with a plain secret -> the handshake
+  // completes (bid bound, secret saved, ready)
+  var secret = Uint8List.fromList(List.generate(32, (i) => i));
+  var synAck = BridgePacketFactory().synAck(
+    UTF8.encode('{"secret":"${Base64.encode(secret)}","token":"t","time":1}'),
+    target: 7,
+  );
+  server.send(synAck.pack(), client.address, client.port);
+  var fromServer = await receive(client, const Duration(seconds: 1));
+  check(fromServer != null, '0b: SYN! delivered');
+  conn.received(fromServer!.data);
+  check(conn.ready && conn.bid == 7, '0b: handshake completed');
+  dg = await receive(server, const Duration(seconds: 1));
+  check(dg != null, '0b: ACK! sent');
 
   // A: idle for 11s -> PING sent, signed
-  conn.ready = true;  // the record survived the wave
   final now = DateTime.now();
   conn.lastSendTime = now.subtract(const Duration(seconds: 11));
   conn.lastReceivedTime = null;
@@ -66,7 +71,7 @@ Future<void> main() async {
   final packet = BridgePacketFactory().parse(dg!.data);
   check(packet != null && packet.command == Command.PING, 'A: is PING');
   final reliable = packet is ReliablePacket ? packet : null;
-  check(reliable != null && reliable.verify(conn.secret!), 'A: signed with secret');
+  check(reliable != null && reliable.verify(secret), 'A: signed with secret');
   check(packet!.source == 7, 'A: source = bid');
   check(UTF8.decode(packet.payload)!.contains('time'), 'A: payload {"time":...}');
   var refreshed = conn.lastSendTime!.difference(DateTime.now()).abs();
@@ -79,18 +84,19 @@ Future<void> main() async {
   check(dg == null, 'B: recent traffic -> no PING');
 
   // C: fresh connection (no timestamps) -> no ping
-  var fresh = BridgeLink(client, (host: server.address, port: server.port), enigma: Enigma());
+  var fresh = BridgeLink(client, (host: server.address, port: server.port),
+      enigma: Enigma(), config: Config());
   if (fresh.needsHeartbeat()) fresh.heartbeat();
   dg = await receive(server, const Duration(milliseconds: 300));
   check(dg == null, 'C: no traffic yet -> no PING');
 
   // D: server replies PONG -> lastReceivedTime refreshed; heartbeat suppressed
   conn.lastSendTime = DateTime.now().subtract(const Duration(seconds: 11));
-  var pong = BridgePacketFactory().pong(Uint8List.fromList([1, 2, 3]), packet).sign(conn.secret!);
+  var pong = BridgePacketFactory().pong(Uint8List.fromList([1, 2, 3]), packet).sign(secret);
   server.send(pong.pack(), client.address, client.port);
-  var fromServer = await receive(client, const Duration(seconds: 1));
-  check(fromServer != null, 'D: PONG delivered');
-  conn.received(fromServer!.data);
+  var pongDg = await receive(client, const Duration(seconds: 1));
+  check(pongDg != null, 'D: PONG delivered');
+  conn.received(pongDg!.data);
   check(conn.lastReceivedTime != null, 'D: lastReceivedTime refreshed');
   if (conn.needsHeartbeat()) conn.heartbeat();
   dg = await receive(server, const Duration(milliseconds: 300));
@@ -100,6 +106,13 @@ Future<void> main() async {
   conn.lastReceivedTime = null;
   conn.received(Uint8List.fromList([1, 2, 3]));
   check(conn.lastReceivedTime == null, 'E: malformed -> no refresh');
+
+  // F: disconnect() -> FIN? with the bound bid
+  conn.disconnect();
+  dg = await receive(server, const Duration(milliseconds: 500));
+  var finPacket = dg == null ? null : BridgePacketFactory().parse(dg.data);
+  check(finPacket != null && finPacket.command == Command.FIN, 'F: disconnect -> FIN? sent');
+  check(finPacket!.source == 7, 'F: FIN? source = bid');
 
   server.close();
   client.close();

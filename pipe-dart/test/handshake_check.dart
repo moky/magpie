@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:pointycastle/export.dart';
 
 import 'package:magpipe/src/bridge.dart';
+import 'package:magpipe/src/utils/config.dart';
 import 'package:magpipe/src/utils/hmac.dart';
 import 'package:magpipe/src/utils/coding.dart';
 import 'package:magpipe/src/utils/enigma.dart';
@@ -55,12 +56,13 @@ Uint8List aeadEncrypt(Uint8List key, Uint8List nonce, Uint8List aad, Uint8List p
 
 Future<void> main() async {
   var enigma = Enigma();  // default key table ('TW9reS')
+  var config = Config();
   var ikm = Base64.decode('TW9reSBsb3ZlcyBNYXkgTGVlIGZvcmV2ZXIh')!;
   registerHmacSha256();
 
   final server = await RawDatagramSocket.bind('127.0.0.1', 0);
   final client = await RawDatagramSocket.bind('127.0.0.1', 0);
-  var link = BridgeLink(client, (host: server.address, port: server.port), enigma: enigma);
+  var link = BridgeLink(client, (host: server.address, port: server.port), enigma: enigma, config: config);
 
   // 1. connect() -> SYN? announcing key names, padded to >= 512
   link.connect();

@@ -45,7 +45,7 @@ import 'direct.dart';
 /// and delivery of the payload, docs/client.md §4.2).
 abstract interface class MagPipe {
 
-  /// Handle one data packet forwarded by the connection: the default
+  /// Handle one data packet forwarded by the link: the default
   /// implementation answers "COPY" to data packets (A=0, D=1) and
   /// "PONG" to heartbeats.
   void processPacket(Packet packet);
@@ -60,24 +60,17 @@ abstract interface class MagPipe {
 
 }
 
-/// Receives every packet forwarded by the pipe: self-contained packets
-/// (ext == 0) and fragments of fragmented messages (ext > 0) alike.
-/// The application decides how to process them (docs/client.md §4.2).
-///
-/// Plug the app's observer via `PipeFactory.pipeDelegate`.
-abstract class MagPipeDelegate {
-
-  /// Handle one packet received through the pipe.
-  void onPacketReceived(Packet packet, MagPipe pipe);
-
-}
-
 class DirectPipe with PayloadMixIn implements MagPipe {
-  DirectPipe(this.connection);
+  DirectPipe(this._link);
 
-  /// The connection this pipe is attached to.
-  final DirectLink connection;
+  /// The link this pipe is attached to.
+  final DirectLink _link;
 
+  final _factory = DirectPacketFactory();
+
+  /// Class name shown by [toString]: the actual runtime type when asserts
+  /// are enabled (debug builds), or the fixed `'DirectPipe'` otherwise.
+  // protected
   String get className {
     String name = 'DirectPipe';
     assert(() {
@@ -89,12 +82,10 @@ class DirectPipe with PayloadMixIn implements MagPipe {
 
   @override
   String toString() => '$className{'
-      'remote=${connection.remoteAddress}, observed=${connection.observedAddress}}';
-
-  final packetFactory = DirectPacketFactory();
+      'remote=${_link.remoteAddress}, observed=${_link.observedAddress}}';
 
   @override
-  bool sendPacket(Magpie packet) => connection.sendPacket(packet);
+  bool sendPacket(Magpie packet) => _link.sendPacket(packet);
 
   @override
   bool sendData(Uint8List payload, {
@@ -102,20 +93,13 @@ class DirectPipe with PayloadMixIn implements MagPipe {
     int index = 0,
     int count = 1,
   }) {
-    final packet = packetFactory.data(payload,
+    final packet = _factory.data(payload,
       sn: sn,
       index: index,
       count: count,
     );
     return sendPacket(packet);
   }
-
-  /// The delegate observing every packet forwarded through this pipe:
-  /// read from the registered factory (`PipeFactory.pipeDelegate`), so
-  /// setting/clearing it affects all pipes at once. Subclasses may
-  /// override this getter for a per-pipe observer.
-  MagPipeDelegate? get delegate =>
-      sharedPipeExtensions.pipeFactory?.pipeDelegate;
 
   /// Answer "PONG" to the peer's "PING": echo the payload except
   /// 'time', which is updated to the local clock (docs/client.md §6).
@@ -135,14 +119,13 @@ class DirectPipe with PayloadMixIn implements MagPipe {
       // paired (docs/client.md §4.2, §9)
       _replyCopy(packet);
     }
-    delegate?.onPacketReceived(packet, this);
   }
 
   void _replyPong(Magpie packet) {
     final now = DateTime.now();
     final info = decodePayload(packet.payload);
     info['time'] = now.millisecondsSinceEpoch / 1000.0;
-    sendPacket(packetFactory.pong(
+    sendPacket(_factory.pong(
       encodePayload(info),
       packet,
     ));
@@ -153,7 +136,7 @@ class DirectPipe with PayloadMixIn implements MagPipe {
     final request = {
       'time': now.millisecondsSinceEpoch / 1000.0,
     };
-    sendPacket(packetFactory.copy(
+    sendPacket(_factory.copy(
       encodePayload(request),
       packet,
     ));
@@ -162,14 +145,19 @@ class DirectPipe with PayloadMixIn implements MagPipe {
 }
 
 class BridgePipe with PayloadMixIn implements MagPipe {
-  BridgePipe(this.connection, {required this.remote, required this.local});
+  BridgePipe(this._link, {required this.target, required this.source});
 
-  /// The connection this pipe is attached to.
-  final BridgeLink connection;
+  /// The link this pipe is attached to.
+  final BridgeLink _link;
 
-  final int remote;  // contact's bid
-  final int local;   // my bid
+  final int target;  // contact's bid
+  final int source;  // my bid
 
+  final _factory = BridgePacketFactory();
+
+  /// Class name shown by [toString]: the actual runtime type when asserts
+  /// are enabled (debug builds), or the fixed `'BridgePipe'` otherwise.
+  // protected
   String get className {
     String name = 'BridgePipe';
     assert(() {
@@ -180,13 +168,11 @@ class BridgePipe with PayloadMixIn implements MagPipe {
   }
 
   @override
-  String toString() => '$className{'
-      'target=$remote, source=$local, bridge=${connection.remoteAddress}';
-
-  final packetFactory = BridgePacketFactory();
+  String toString() => '$className{target=$target, source=$source, '
+      'bridge=${_link.remoteAddress}, observed=${_link.observedAddress}}';
 
   @override
-  bool sendPacket(Magpie packet) => connection.sendPacket(packet);
+  bool sendPacket(Magpie packet) => _link.sendPacket(packet);
 
   @override
   bool sendData(Uint8List payload, {
@@ -194,13 +180,11 @@ class BridgePipe with PayloadMixIn implements MagPipe {
     int index = 0,
     int count = 1,
   }) {
-    final target = remote;
-    final source = local;
     if (target == 0 || source == 0) {
       assert(false, 'bids error: target=$target, source=$source.');
       return false;
     }
-    final packet = packetFactory.data(payload,
+    final packet = _factory.data(payload,
       target: target,
       source: source,
       sn: sn,
@@ -209,13 +193,6 @@ class BridgePipe with PayloadMixIn implements MagPipe {
     );
     return sendPacket(packet);
   }
-
-  /// The delegate observing every packet forwarded through this pipe:
-  /// read from the registered factory (`PipeFactory.pipeDelegate`), so
-  /// setting/clearing it affects all pipes at once. Subclasses may
-  /// override this getter for a per-pipe observer.
-  MagPipeDelegate? get delegate =>
-      sharedPipeExtensions.pipeFactory?.pipeDelegate;
 
   /// Answer "PONG" to the peer's "PING": echo the payload except
   /// 'time', which is updated to the local clock (docs/client.md §6).
@@ -235,14 +212,13 @@ class BridgePipe with PayloadMixIn implements MagPipe {
       // sn/index paired (docs/client.md §4.2, §9)
       _replyCopy(packet);
     }
-    delegate?.onPacketReceived(packet, this);
   }
 
   void _replyPong(Magpie packet) {
     final now = DateTime.now();
     final info = decodePayload(packet.payload);
     info['time'] = now.millisecondsSinceEpoch / 1000.0;
-    sendPacket(packetFactory.pong(
+    sendPacket(_factory.pong(
       encodePayload(info),
       packet,
     ));
@@ -253,46 +229,10 @@ class BridgePipe with PayloadMixIn implements MagPipe {
     final request = {
       'time': now.millisecondsSinceEpoch / 1000.0,
     };
-    sendPacket(packetFactory.copy(
+    sendPacket(_factory.copy(
       encodePayload(request),
       packet,
     ));
   }
 
 }
-
-//
-//  Factory
-//
-
-/// Factory: builds pipes and wires the app's observer.
-///
-/// The default implementations build plain pipes; applications with
-/// special needs extend this class and override `createXxx`.
-class PipeFactory {
-  PipeFactory([this.pipeDelegate]);
-
-  /// The delegate observing every pipe created by this factory: read
-  /// at dispatch time, so setting/clearing it affects all pipes at
-  /// once (null = no observation).
-  MagPipeDelegate? pipeDelegate;
-
-  DirectPipe createDirectPipe(DirectLink conn) => DirectPipe(conn);
-
-  BridgePipe createBridgePipe(BridgeLink conn, {
-    required int remote,
-    required int local,
-  }) => BridgePipe(conn, remote: remote, local: local);
-
-}
-
-class PipeExtensions {
-  factory PipeExtensions() => _instance;
-  static final PipeExtensions _instance = PipeExtensions._internal();
-  PipeExtensions._internal();
-
-  PipeFactory? pipeFactory;
-
-}
-
-final sharedPipeExtensions = PipeExtensions();
