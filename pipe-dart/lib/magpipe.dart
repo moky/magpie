@@ -16,9 +16,9 @@ export 'src/utils/hkdf.dart';                  // HkdfCipher / HkdfSha256
 export 'src/utils/hmac.dart';                  // registerHmacSha256
 export 'src/utils/payload.dart';               // PayloadMixIn
 
-export 'src/ext.dart';                         // PipeFactory / MagpieDelegate
-export 'src/link.dart';                        // MagLink / BaseLink
+export 'src/base.dart';                        // MagPipe / MagLink / MagpieDelegate
+export 'src/link.dart';                        // BaseLink
 export 'src/hub.dart';                         // MagHub
-export 'src/pipe.dart';                        // MagPipe
+export 'src/pipe.dart';                        // DirectPipe / BridgePipe
 export 'src/bridge.dart';                      // BridgeLink
 export 'src/direct.dart';                      // DirectLink

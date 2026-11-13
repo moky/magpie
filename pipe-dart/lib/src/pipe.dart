@@ -35,36 +35,13 @@ import 'package:magpie_bridge/protocol.dart';
 
 import 'utils/payload.dart';
 
-import 'bridge.dart';
-import 'direct.dart';
-
-/// Pipe: processes data packets forwarded by the MagLink.
-///
-/// The application inherits this class and overrides [MagPipe.processPacket]
-/// to implement its own receiving logic (dedup by sn, fragment reassembly
-/// and delivery of the payload, docs/client.md §4.2).
-abstract interface class MagPipe {
-
-  /// Handle one data packet forwarded by the link: the default
-  /// implementation answers "COPY" to data packets (A=0, D=1) and
-  /// "PONG" to heartbeats.
-  void processPacket(Packet packet);
-
-  bool sendPacket(Magpie packet);
-
-  bool sendData(Uint8List payload, {
-    required int sn,
-    int index = 0,
-    int count = 1,
-  });
-
-}
+import 'base.dart';
 
 class DirectPipe with PayloadMixIn implements MagPipe {
   DirectPipe(this._link);
 
   /// The link this pipe is attached to.
-  final DirectLink _link;
+  final MagLink _link;
 
   final _factory = DirectPacketFactory();
 
@@ -104,11 +81,8 @@ class DirectPipe with PayloadMixIn implements MagPipe {
   /// Answer "PONG" to the peer's "PING": echo the payload except
   /// 'time', which is updated to the local clock (docs/client.md §6).
   /// Data packets (A=0, D=1) are answered "COPY" with sn/index paired
-  /// (docs/client.md §4.2, §9).
-  ///
-  /// Every packet also goes to the delegate: the application observes
-  /// the full conversation and handles the payload itself (fragment
-  /// reassembly is up to the app).
+  /// (docs/client.md §4.2, §9). The delegate observation happens at
+  /// the link level ([BaseLink.processPacket]).
   @override
   void processPacket(Packet packet) {
     if (packet.cmd == 1 && packet.command == Command.PING) {
@@ -148,7 +122,7 @@ class BridgePipe with PayloadMixIn implements MagPipe {
   BridgePipe(this._link, {required this.target, required this.source});
 
   /// The link this pipe is attached to.
-  final BridgeLink _link;
+  final MagLink _link;
 
   final int target;  // contact's bid
   final int source;  // my bid
@@ -197,11 +171,8 @@ class BridgePipe with PayloadMixIn implements MagPipe {
   /// Answer "PONG" to the peer's "PING": echo the payload except
   /// 'time', which is updated to the local clock (docs/client.md §6).
   /// Data packets forwarded from a peer (A=0, D=1) are answered "COPY"
-  /// with sn/index paired (docs/client.md §4.2, §9).
-  ///
-  /// Every packet also goes to the delegate: the application observes
-  /// the full conversation and handles the payload itself (fragment
-  /// reassembly is up to the app).
+  /// with sn/index paired (docs/client.md §4.2, §9). The delegate
+  /// observation happens at the link level ([BaseLink.processPacket]).
   @override
   void processPacket(Packet packet) {
     if (packet.cmd == 1 && packet.command == Command.PING) {

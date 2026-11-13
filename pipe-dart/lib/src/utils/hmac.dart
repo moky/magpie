@@ -89,5 +89,5 @@ class _Hmac implements MacGenerator {
 /// Register the default HMAC-SHA256 generator (backed by pointycastle):
 /// the connection signs every post-handshake packet with it.
 void registerHmacSha256() {
-  HmacSha256.generator = _Hmac();
+  HmacSha256.generator ??= _Hmac();
 }

@@ -47,7 +47,7 @@ mixin PayloadMixIn {
     return UTF8.encode(text);
   }
 
-  /// Pad the JSON body to at least [ServerConfig.handshakeMinPayload]
+  /// Pad the JSON body to at least [Config.handshakeMinPayload]
   /// bytes with a 'blah' field (docs/client.md 5.1): the value repeats
   /// 'blah' separated by spaces, so the padded body may exceed the
   /// minimum by up to 4 bytes.

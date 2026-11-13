@@ -34,8 +34,9 @@ connections.
   packets and "PONG" to heartbeats; override it on your pipe subclass
   to plug in your own dedup, fragment reassembly and delivery.
 - **Observing**: a `MagpieDelegate` receives every packet received
-  through the link - handshake waves included; set it on the shared
-  `MagpieExtensions` (`delegate`) without subclassing anything.
+  through the link - handshake waves included; pass it to
+  `MagHub.create` / the `MagHub` constructor (`delegate`) without
+  subclassing anything.
 
 See `docs/protocol.md` in the Magpie Bridge repository for the wire
 format and `docs/client.md` for the client behaviour.
@@ -45,13 +46,9 @@ format and `docs/client.md` for the client behaviour.
 ```dart
 var enigma = Enigma();  // feeds the encrypted handshake
 var config = Config();  // timing knobs (heartbeat/handshake intervals, ...)
+var delegate = MyDelegate();  // observes every packet (a no-op works too)
 
-var hub = await MagHub.create(enigma: enigma, config: config);
-
-// pipes are built by the registered factory (required); the delegate
-// observes every packet received through the links (optional):
-sharedMagpieExtensions.pipeFactory = PipeFactory();
-sharedMagpieExtensions.delegate = MyDelegate();
+var hub = await MagHub.create(enigma: enigma, config: config, delegate: delegate);
 
 // bridge connection to the relay server (B=1):
 var bridge = hub.connectBridge(server);

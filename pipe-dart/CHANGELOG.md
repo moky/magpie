@@ -1,3 +1,15 @@
+## 0.3.6
+
+- Breaking: `MagpieExtensions` is removed - pipes and the delegate are
+  ctor-injected per link/hub now.
+- New callbacks: `onPacketSent` / `onPacketFailed`.
+- `BaseLink.processPacket`: template - every packet received through
+  the link reaches the delegate (handshake waves included; `pipe` is
+  null for packets arriving before their pipe exists).
+- The queue-full drop fires `onPacketFailed` for the dropped packet.
+- Fix: the "ACK!" resent after a "connection unconfirmed" FAIL is
+  pre-signed in the encrypted mode (docs/protocol.md §5.1).
+
 ## 0.3.5
 
 - `MagpieDelegate` (was `MagPipeDelegate`): the app observer now sees

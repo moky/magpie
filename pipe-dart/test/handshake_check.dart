@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:pointycastle/export.dart';
 
+import 'package:magpipe/src/base.dart';
 import 'package:magpipe/src/bridge.dart';
 import 'package:magpipe/src/utils/config.dart';
 import 'package:magpipe/src/utils/hmac.dart';
@@ -54,6 +55,16 @@ Uint8List aeadEncrypt(Uint8List key, Uint8List nonce, Uint8List aad, Uint8List p
   return gcm.process(plaintext);
 }
 
+/// no-op delegate: satisfies the link's observer contract
+class _NoopDelegate implements MagpieDelegate {
+  @override
+  void onPacketReceived(Packet packet, MagPipe? pipe, MagLink link) {}
+  @override
+  void onPacketSent(Magpie packet, MagPipe? pipe, MagLink link) {}
+  @override
+  void onPacketFailed(Magpie packet, MagPipe? pipe, MagLink link) {}
+}
+
 Future<void> main() async {
   var enigma = Enigma();  // default key table ('TW9reS')
   var config = Config();
@@ -62,7 +73,8 @@ Future<void> main() async {
 
   final server = await RawDatagramSocket.bind('127.0.0.1', 0);
   final client = await RawDatagramSocket.bind('127.0.0.1', 0);
-  var link = BridgeLink(client, (host: server.address, port: server.port), enigma: enigma, config: config);
+  var factory = BridgeFactory(enigma, config, _NoopDelegate());
+  var link = factory.createLink(client, (host: server.address, port: server.port));
 
   // 1. connect() -> SYN? announcing key names, padded to >= 512
   link.connect();

@@ -35,11 +35,11 @@ import 'package:magpie_bridge/protocol.dart';
 
 import 'utils/config.dart';
 import 'utils/enigma.dart';
+import 'utils/hmac.dart';
 
+import 'base.dart';
 import 'bridge.dart';
-import 'link.dart';
 import 'direct.dart';
-import 'pipe.dart';
 
 /// UDP hub: wraps one shared socket and multiplexes every [MagLink]
 /// registered on it.
@@ -53,8 +53,7 @@ import 'pipe.dart';
 /// var enigma = Enigma();
 /// enigma.updateSecrets(secrets);
 /// var config = Config();
-/// var hub = MagHub(socket, enigma: enigma, config: config);  // or MagHub.create(...)
-/// sharedMagpieExtensions.pipeFactory = PipeFactory();
+/// var hub = MagHub(socket, enigma: enigma, config: config, delegate: delegate);  // or MagHub.create(...)
 /// var bridge = hub.connectBridge(server);  // bridge connection (B=1)
 /// var direct = hub.connect(peer);          // direct connection (B=0)
 /// ...
@@ -74,16 +73,19 @@ class MagHub {
   MagHub(this._socket, {
     required Enigma enigma,
     required Config config,
-  }) : _enigma = enigma, _config = config {
+    required MagpieDelegate delegate
+  }) {
+    // prepare
+    registerHmacSha256();
+    // factories
+    _directFactory = DirectFactory(enigma, config, delegate);
+    _bridgeFactory = BridgeFactory(enigma, config, delegate);
     // pump the shared socket: route each datagram to its connection
     _socket.listen(_onEvent);
   }
 
-  final Config _config;
-
-  /// The enigma shared by this hub's bridge links: its key table feeds
-  /// the encrypted handshake.
-  final Enigma _enigma;
+  late final DirectFactory _directFactory;
+  late final BridgeFactory _bridgeFactory;
 
   /// The shared local UDP socket (bound once, used by all links).
   final RawDatagramSocket _socket;
@@ -101,11 +103,13 @@ class MagHub {
     InternetAddress? host,
     int port = 0,
     required Enigma enigma,
-    required Config config,
+    Config? config,
+    required MagpieDelegate delegate
   }) async => MagHub(
     await RawDatagramSocket.bind(host ?? InternetAddress.anyIPv4, port),
     enigma: enigma,
-    config: config,
+    config: config ?? Config(),
+    delegate: delegate,
   );
 
   /// Register a direct link to the peer endpoint [remote] (B=0).
@@ -114,7 +118,7 @@ class MagHub {
   DirectLink connect(SocketAddress remote) {
     var link = _directLinks[remote];
     if (link == null) {
-      link = DirectLink(_socket, remote, enigma: _enigma, config: _config);
+      link = _directFactory.createLink(_socket, remote);
       _directLinks[remote] = link;
       link.connect();  // send "SYN?" (stateless handshake)
     }
@@ -127,7 +131,7 @@ class MagHub {
   BridgeLink connectBridge(SocketAddress remote) {
     var link = _bridgeLinks[remote];
     if (link == null) {
-      link = BridgeLink(_socket, remote, enigma: _enigma, config: _config);
+      link = _bridgeFactory.createLink(_socket, remote);
       _bridgeLinks[remote] = link;
       link.connect();  // send "SYN?"
     }
@@ -165,7 +169,7 @@ class MagHub {
   /// Get the direct pipe to the peer [remote] (B=0): connect first,
   /// then return the pipe of the direct link.
   ///
-  /// Returns null when no [PipeFactory] is plugged via [MagpieExtensions].
+  /// Returns null when no pipe factory can build it.
   MagPipe? getDirectPipe(SocketAddress remote) {
     final link = connect(remote);
     return link.getPipe(0);
@@ -179,7 +183,7 @@ class MagHub {
   /// `accept([target])` is sent automatically to permit the target,
   /// then the pipe is looked up again.
   ///
-  /// Returns null when no [PipeFactory] is plugged via [MagpieExtensions],
+  /// Returns null when no pipe factory can build it,
   /// or the link is not ready yet (no "ACK!" received).
   MagPipe? getBridgePipe(SocketAddress remote, int target) {
     final link = connectBridge(remote);

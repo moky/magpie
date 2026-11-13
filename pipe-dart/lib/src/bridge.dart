@@ -28,28 +28,64 @@
  * SOFTWARE.
  * ==============================================================================
  */
+import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:magpie_bridge/factory.dart';
 import 'package:magpie_bridge/magpie.dart';
 import 'package:magpie_bridge/protocol.dart';
-import 'package:magpie_bridge/factory.dart';
 
 import 'utils/coding.dart';
+import 'utils/config.dart';
 import 'utils/enigma.dart';
 import 'utils/payload.dart';
 
-import 'ext.dart';
+import 'base.dart';
 import 'link.dart';
 import 'pipe.dart';
+
+/// Factory: builds bridge pipes and wires the app's delegate.
+///
+/// The default implementations build plain pipes; applications with
+/// special needs extend this class and override `createXxx`.
+class BridgeFactory extends BridgePacketFactory {
+  const BridgeFactory(this._enigma, this._config, this._delegate);
+
+  final Enigma _enigma;
+  final Config _config;
+  final MagpieDelegate _delegate;
+
+  /// Build a pipe bound to the given connection: [target] is the
+  /// peer's bid, [source] my own.
+  BridgePipe createPipe(MagLink conn, {
+    required int target,
+    required int source,
+  }) => BridgePipe(conn, target: target, source: source);
+
+  /// Build a link to the relay server: the link shares this factory
+  /// (`bridgeFactory: this`), so its pipes are built by it too.
+  BridgeLink createLink(RawDatagramSocket socket, SocketAddress remote) =>
+      BridgeLink(this, socket, remote,
+        enigma: _enigma,
+        config: _config,
+        delegate: _delegate
+      );
+
+}
 
 /// Link to the relay server (B=1): handshake waves and system
 /// command handling are implemented; data packets are answered with
 /// "COPY" and handed to the pipe of the source peer.
 class BridgeLink extends BaseLink with PayloadMixIn {
-  BridgeLink(super.socket, super.remoteAddress, {
+  BridgeLink(this._factory, super.socket, super.remoteAddress, {
     required super.enigma,
     required super.config,
+    required super.delegate,
   });
+
+  /// Builds the packets and the pipes for this link: the same factory
+  /// instance is shared by every link wired by it.
+  final BridgeFactory _factory;
 
   /// The bid assigned by the server after the handshake (0 = not yet).
   int get bid => _bid;
@@ -80,8 +116,6 @@ class BridgeLink extends BaseLink with PayloadMixIn {
   @override
   String toString() => '$className{bid=$bid, '
       'remote=$remoteAddress, observed=$observedAddress}';
-
-  final _factory = BridgePacketFactory();
 
   /// The bridge pipes for data exchange, keyed by the peer's bid.
   final Map<int, BridgePipe> _bridgePipes = {};
@@ -275,12 +309,17 @@ class BridgeLink extends BaseLink with PayloadMixIn {
       'token': token,
       'time': now.millisecondsSinceEpoch / 1000.0,
     };
-    final ack = _factory.ack(
+    BasePacket ack = _factory.ack(
       padPayload(response, config: config),
       source: target,
     );
+    if (bundle is Map) {
+      ack = ack.sign(messageKey);
+    }
     _lastAck = ack;
-    sendPacket(ack, encryptedMode: bundle is Map);
+    // signed above for the encrypted mode, unsigned for the plain mode:
+    // send it as-is either way
+    sendPacket(ack, encryptedMode: false);
     _ready = true;
     _connectAttempts = 0;  // handshake complete: retry counter resets
     // the pipe to the server itself (bid 0): (re)created on every
@@ -338,8 +377,8 @@ class BridgeLink extends BaseLink with PayloadMixIn {
     _lastAckResend = now;
     final ack = _lastAck;
     if (ack != null) {
-      // byte-identical to the original handshake wave: no re-signing
-      // (sendPacket would attach an HMAC the first ACK! never carried)
+      // byte-identical to the original handshake wave: pre-signed for
+      // the encrypted mode; the plain-mode ACK! must stay unsigned
       packAndSend(ack);
     }
   }
@@ -424,11 +463,11 @@ class BridgeLink extends BaseLink with PayloadMixIn {
   static final List<int> PERMIT_ALL = [1, 2, 3];
 
   /// Build a pipe for the peer [remote] bound to this connection: the
-  /// application must plug a custom [PipeFactory] via [MagpieExtensions].
-  BridgePipe? _newPipe(int remote) {
-    final pipeFactory = sharedMagpieExtensions.pipeFactory;
-    return pipeFactory?.createBridgePipe(this, target: remote, source: bid);
-  }
+  /// application's delegate observes packets routed to it.
+  BridgePipe? _newPipe(int remote) => _factory.createPipe(this,
+    target: remote,
+    source: bid,
+  );
 
   @override
   Packet? parse(Uint8List data) {
@@ -458,7 +497,9 @@ class BridgeLink extends BaseLink with PayloadMixIn {
       }
     } else if (command == Command.FAIL) {
       // unsigned "FAIL": sent without attachment when the server holds
-      // no record for this socket (restart / record purge)
+      // no record for this socket (restart / record purge); it still
+      // reaches the delegate - see MagpieDelegate.onPacketReceived for
+      // the app-side authenticity check (docs/protocol.md §5.1)
       return packet;
     }
     // forged: HMAC mismatch, or a required attachment is missing
@@ -477,7 +518,9 @@ class BridgeLink extends BaseLink with PayloadMixIn {
         break;
       case Command.FAIL:
         // "connection unconfirmed": resend the last "ACK!" (idempotent);
-        // everything else is routed to the pipe for the upper layer
+        // peer-offline / permit-failure FAILs just flow to the delegate
+        // below - unsigned ones may be forged, see
+        // MagpieDelegate.onPacketReceived (docs/protocol.md §5.1)
         _handleFail(packet);
         break;
     }

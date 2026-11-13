@@ -3,9 +3,20 @@ import 'dart:io';
 import 'package:magpie_bridge/factory.dart';
 import 'package:magpie_bridge/protocol.dart';
 
+import 'package:magpipe/src/base.dart';
 import 'package:magpipe/src/direct.dart';
 import 'package:magpipe/src/utils/config.dart';
 import 'package:magpipe/src/utils/enigma.dart';
+
+/// no-op delegate: satisfies the link's observer contract
+class _NoopDelegate implements MagpieDelegate {
+  @override
+  void onPacketReceived(Packet packet, MagPipe? pipe, MagLink link) {}
+  @override
+  void onPacketSent(Magpie packet, MagPipe? pipe, MagLink link) {}
+  @override
+  void onPacketFailed(Magpie packet, MagPipe? pipe, MagLink link) {}
+}
 
 int failed = 0;
 void check(bool ok, String name) {
@@ -32,11 +43,8 @@ void main() async {
   // fake peer + client on loopback
   final peer = await RawDatagramSocket.bind('127.0.0.1', 0);
   final client = await RawDatagramSocket.bind('127.0.0.1', 0);
-  final link = DirectLink(
-    client, (host: peer.address, port: peer.port),
-    enigma: Enigma(),
-    config: Config(),
-  );
+  var factory = DirectFactory(Enigma(), Config(), _NoopDelegate());
+  final link = factory.createLink(client, (host: peer.address, port: peer.port));
   // counters[0] = "SYN?" sent, counters[1] = "PING" sent
   final counters = [0, 0];
 

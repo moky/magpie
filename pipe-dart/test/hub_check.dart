@@ -3,15 +3,11 @@ import 'dart:typed_data';
 
 
 import 'package:magpipe/src/hub.dart';
-import 'package:magpipe/src/link.dart';
-import 'package:magpipe/src/ext.dart';
-import 'package:magpipe/src/pipe.dart';
-import 'package:magpipe/src/bridge.dart';
-import 'package:magpipe/src/direct.dart';
+import 'package:magpipe/src/base.dart';
 import 'package:magpipe/src/utils/config.dart';
 import 'package:magpipe/src/utils/hmac.dart';
-import 'package:magpipe/src/utils/enigma.dart';
 import 'package:magpipe/src/utils/coding.dart';
+import 'package:magpipe/src/utils/enigma.dart';
 import 'package:magpie_bridge/factory.dart';
 import 'package:magpie_bridge/magpie.dart';
 
@@ -32,19 +28,7 @@ Future<Datagram?> receive(RawDatagramSocket s, Duration timeout) async {
   return null;
 }
 
-/// concrete pipe for the test (MagPipe.process is abstract)
-class TestPipe extends DirectPipe {
-  TestPipe(super.connection);
-
-  @override
-  void processPacket(Packet packet) {
-    // forward to the base: answer COPY/PONG and observe via the
-    // registered pipe delegate
-    super.processPacket(packet);
-  }
-}
-
-/// records packets observed through the pipe delegate
+/// records packets observed through the link delegate
 class PipeRecorder implements MagpieDelegate {
   int calls = 0;
   @override
@@ -57,30 +41,9 @@ class PipeRecorder implements MagpieDelegate {
   void onPacketFailed(Magpie packet, MagPipe? pipe, MagLink link) {}
 }
 
-/// concrete bridge pipe for the test
-class TestBridgePipe extends BridgePipe {
-  TestBridgePipe(super.connection, {required super.target, required super.source});
-
-  @override
-  void processPacket(Packet packet) {}
-}
-
-/// test-only factory: creates the concrete pipes for the hub check
-class TestPipeFactory extends PipeFactory {
-  @override
-  DirectPipe createDirectPipe(DirectLink conn) => TestPipe(conn);
-
-  @override
-  BridgePipe createBridgePipe(BridgeLink conn, {
-    required int target,
-    required int source,
-  }) => TestBridgePipe(conn, target: target, source: source);
-}
-
 Future<void> main() async {
   registerHmacSha256();
-  var factory = TestPipeFactory();
-  sharedMagpieExtensions.pipeFactory = factory;
+  var recorder = PipeRecorder();
 
   // fake remote peers
   final server = await RawDatagramSocket.bind('127.0.0.1', 0);
@@ -88,7 +51,7 @@ Future<void> main() async {
 
   // 1. bind the shared socket and create the hub on it
   var socket = await RawDatagramSocket.bind(InternetAddress.loopbackIPv4, 0);
-  var hub = MagHub(socket, enigma: Enigma(), config: Config());
+  var hub = MagHub(socket, enigma: Enigma(), config: Config(), delegate: recorder);
   check(socket.address.address == '127.0.0.1', '1: hub bound to loopback');
   check(socket.port != 0, '1: ephemeral port');
 
@@ -176,13 +139,11 @@ Future<void> main() async {
   stranger.close();
 
   // 9. pipe delegate observes the forwarded DATA packet
-  var recorder = PipeRecorder();
-  sharedMagpieExtensions.delegate = recorder;
+  var before = recorder.calls;
   var probe = DirectPacketFactory().data(Uint8List.fromList([7, 8, 9]), sn: 9);
   peer.send(probe.pack(), socket.address, socket.port);
   await Future.delayed(const Duration(milliseconds: 200));
-  check(recorder.calls == 1, '9: pipe delegate observed the packet');
-  sharedMagpieExtensions.delegate = null;
+  check(recorder.calls == before + 1, '9: pipe delegate observed the packet');
 
   // 10: close the hub - all links disconnected, socket closed
   hub.close();

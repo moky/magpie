@@ -28,16 +28,44 @@
  * SOFTWARE.
  * ==============================================================================
  */
+import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:magpie_bridge/protocol.dart';
 import 'package:magpie_bridge/factory.dart';
+import 'package:magpie_bridge/protocol.dart';
 
+import 'utils/config.dart';
+import 'utils/enigma.dart';
 import 'utils/payload.dart';
 
-import 'ext.dart';
+import 'base.dart';
 import 'link.dart';
 import 'pipe.dart';
+
+/// Factory: builds direct pipes and wires the app's delegate.
+///
+/// The default implementations build plain pipes; applications with
+/// special needs extend this class and override `createXxx`.
+class DirectFactory extends DirectPacketFactory {
+  const DirectFactory(this._enigma, this._config, this._delegate);
+
+  final Enigma _enigma;
+  final Config _config;
+  final MagpieDelegate _delegate;
+
+  /// Build a pipe bound to the given connection.
+  DirectPipe createPipe(MagLink conn) => DirectPipe(conn);
+
+  /// Build a link to the peer endpoint: the link shares this factory
+  /// (`directFactory: this`), so its pipes are built by it too.
+  DirectLink createLink(RawDatagramSocket socket, SocketAddress remote,) =>
+      DirectLink(this, socket, remote,
+        enigma: _enigma,
+        config: _config,
+        delegate: _delegate,
+      );
+
+}
 
 /// Link to a peer directly (B=0): the three-way handshake (SYN?/SYN!/
 /// ACK!) establishes the connection without secret/token; data packets
@@ -48,10 +76,15 @@ import 'pipe.dart';
 /// (unlike the bridge link - its server is a long-lived public target,
 /// hence the encrypted handshake there).
 class DirectLink extends BaseLink with PayloadMixIn {
-  DirectLink(super.socket, super.remoteAddress, {
+  DirectLink(this._factory, super.socket, super.remoteAddress, {
     required super.enigma,
     required super.config,
+    required super.delegate
   });
+
+  /// Builds the packets and the pipes for this link: the same factory
+  /// instance is shared by every link wired by it.
+  final DirectFactory _factory;
 
   @override
   bool get ready => _ready;
@@ -79,8 +112,8 @@ class DirectLink extends BaseLink with PayloadMixIn {
   String toString() => '$className{'
       'remote=$remoteAddress, observed=$observedAddress}';
 
-  final _factory = DirectPacketFactory();
-
+  /// The pipe to the peer: created at dial time (initiator role), or
+  /// on the peer's "ACK!" (responder role) - see [connect]/[_handleAck].
   DirectPipe? _directPipe;
 
   /// "SYN?" retries sent since the dial began (reset when the handshake
@@ -228,12 +261,9 @@ class DirectLink extends BaseLink with PayloadMixIn {
     ));
   }
 
-  /// Build a pipe bound to this connection: the application must plug
-  /// a custom [PipeFactory] via [MagpieExtensions].
-  DirectPipe? _newPipe() {
-    final pipeFactory = sharedMagpieExtensions.pipeFactory;
-    return pipeFactory?.createDirectPipe(this);
-  }
+  /// Build a pipe bound to this connection: the factory is
+  /// ctor-injected, so the link always builds its own pipe kind.
+  DirectPipe? _newPipe() => _factory.createPipe(this);
 
   @override
   Packet? parse(Uint8List data) {

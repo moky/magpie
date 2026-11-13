@@ -1,6 +1,6 @@
 // Magpie Bridge pipe transport - minimal usage example.
 //
-// Start the relay server (see the server project) on 127.0.0.1:4004,
+// Start the relay server (see the server project) on 127.0.0.1:9527,
 // then run:
 //
 //   dart run example/magpipe_example.dart
@@ -13,39 +13,32 @@ import 'dart:typed_data';
 
 import 'package:magpipe/magpipe.dart';
 
-/// the app's bridge pipe: receives the data flow from the peer
-class ChatPipe extends BridgePipe {
-  ChatPipe(super.connection, {required super.target, required super.source});
-
+/// the app's delegate: observes every packet received through the links
+class PacketPrinter implements MagpieDelegate {
   @override
-  void processPacket(Packet packet) {
-    // answer "COPY" first, then observe via the shared delegate
-    // (docs/client.md §4.2)
-    super.processPacket(packet);
+  void onPacketReceived(Packet packet, MagPipe? pipe, MagLink link) {
     // a message from the peer (A=0, D=1): print the payload
-    if (packet.ack == 0 && packet.sn != 0) {
+    if (packet.ack == 0 && packet.dsn == 1 && packet.payload.isNotEmpty) {
       print('<< ${utf8.decode(packet.payload, allowMalformed: true)}');
+    } else {
+      print('<< ${packet.runtimeType} (${packet.payloadLength}B)');
     }
   }
-}
-
-/// the app's pipe factory: plugged into the shared MagpieExtensions hook
-class ChatPipeFactory extends PipeFactory {
   @override
-  BridgePipe createBridgePipe(BridgeLink conn, {
-    required int target,
-    required int source,
-  }) => ChatPipe(conn, target: target, source: source);
+  void onPacketSent(Magpie packet, MagPipe? pipe, MagLink link) {}
+  @override
+  void onPacketFailed(Magpie packet, MagPipe? pipe, MagLink link) {}
 }
 
 Future<void> main() async {
   registerHmacSha256();
-  final server = (host: InternetAddress.loopbackIPv4, port: 4004);
+  final server = (host: InternetAddress.loopbackIPv4, port: 9527);
   const peer = 42;  // the peer's bid, announced out-of-band
 
-  // 1. the hub binds one shared UDP socket for every connection
-  final hub = await MagHub.create(enigma: Enigma(), config: Config());
-  sharedMagpieExtensions.pipeFactory = ChatPipeFactory();
+  // 1. the hub binds one shared UDP socket for every connection; the
+  //    delegate observes every packet received through the links
+  final hub = await MagHub.create(
+      enigma: Enigma(), config: Config(), delegate: PacketPrinter());
 
   // 2. connect to the relay server (B=1): the three-way handshake runs
   //    in the background until the link is [ready]
@@ -72,7 +65,10 @@ Future<void> main() async {
   print(ok ? '>> hello magpie' : '>> send failed');
 
   // ... keep the process alive to receive the peer's replies
-  await Future.delayed(const Duration(seconds: 5));
+  for (var i = 0; i < 5; i++) {
+    hub.keepAlive(DateTime.now());  // drive heartbeats / re-connects
+    await Future.delayed(const Duration(seconds: 1));
+  }
   hub.disconnect(server);
   hub.close();
 }

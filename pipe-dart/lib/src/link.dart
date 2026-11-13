@@ -37,39 +37,32 @@ import 'package:magpie_bridge/protocol.dart';
 import 'utils/config.dart';
 import 'utils/enigma.dart';
 
-import 'ext.dart';
-import 'pipe.dart';
+import 'base.dart';
 
-abstract interface class MagLink {
-
-  bool get ready;
-
-  void connect([DateTime? now]);
-
-  void disconnect([DateTime? now]);
-
-  void heartbeat([DateTime? now]);
-
-  /// Called when received raw bytes from the peer.
-  void received(Uint8List data);
-
-  //
-  //   Pipes
-  //
-
-  MagPipe? getPipe(int remote);
-
-}
-
+/// The base class for links: the shared state (socket, enigma, config,
+/// delegate), the scheduling predicates and the send path (signing,
+/// deferral) - the concrete links add the handshake state machines.
 abstract class BaseLink implements MagLink {
+  /// Creates the link on the pre-bound [socket] for [remoteAddress]:
+  /// the enigma/config/delegate are shared by every link of the hub.
   BaseLink(this.socket, this.remoteAddress, {
     required this.enigma,
     required this.config,
+    required this.delegate
   });
 
+  /// The app layer's observer: sees every packet received through,
+  /// sent over or dropped by this link.
+  // protected
+  final MagpieDelegate delegate;
+
+  /// The timing knobs shared by every link of this hub: heartbeat and
+  /// handshake intervals, limits.
   // protected
   final Config config;
 
+  /// Feeds the encrypted handshake: decrypts the session secret from
+  /// the server's "SYN!" reply.
   // protected
   final Enigma enigma;
 
@@ -77,14 +70,10 @@ abstract class BaseLink implements MagLink {
   // protected
   final RawDatagramSocket socket;
 
-  /// The remote endpoint of this connection (IP address + UDP port):
-  /// the relay server for a bridge link, the peer for a direct link.
+  @override
   final SocketAddress remoteAddress;
 
-  /// The local address as observed by the peer, carried in the "UDP"
-  /// field of the "SYN!" payload (bridge: docs/client.md §5.1,
-  /// direct: docs/workflow.md §2.3); null until the handshake
-  /// delivers it.
+  @override
   String? observedAddress;
 
   /// The peer's IP address.
@@ -101,12 +90,12 @@ abstract class BaseLink implements MagLink {
   /// packets bound for the server are signed with it.
   Uint8List? get secret;
 
-  /// Time of the last outgoing datagram (refreshed by [send]: data,
-  /// handshake waves and heartbeats all count).
+  /// Time of the last outgoing datagram (refreshed by [packAndSend]:
+  /// data, handshake waves and heartbeats all count).
   DateTime? lastSendTime;
 
-  /// Time of the last incoming datagram (refreshed by [process]: PONG,
-  /// COPY, data and system commands all count).
+  /// Time of the last incoming datagram (refreshed by [processPacket]:
+  /// PONG, COPY, data and system commands all count).
   DateTime? lastReceivedTime;
 
   /// Whether the link has been idle long enough for a heartbeat (H =
@@ -186,6 +175,12 @@ abstract class BaseLink implements MagLink {
   final List<Magpie> _pendingPackets = [];
 
   /// Send the packets deferred while re-handshaking.
+  ///
+  /// A packet queued while the secret is cleared (bridge re-handshake
+  /// window; only reachable through a held pipe reference) goes out
+  /// unsigned and is dropped by the server - an acceptable, rare loss
+  /// healed by the app-level retransmission (docs/client.md §3), so
+  /// no re-signing here on purpose.
   void drain() {
     final deferred = List.of(_pendingPackets);
     _pendingPackets.clear();
@@ -198,23 +193,19 @@ abstract class BaseLink implements MagLink {
   /// exact bytes a previous sendPacket would have put on the wire.
   // protected
   bool packAndSend(Magpie packet) {
-    final delegate = sharedMagpieExtensions.delegate;
     final pipe = getPipe(packet.target);
     final data = packet.pack();
     final size = socket.send(data, host, port);
     if (size != data.length) {
-      delegate?.onPacketFailed(packet, pipe, this);
+      delegate.onPacketFailed(packet, pipe, this);
       return false;
     }
     lastSendTime = DateTime.now();
-    delegate?.onPacketSent(packet, pipe, this);
+    delegate.onPacketSent(packet, pipe, this);
     return true;
   }
 
-  /// Pack and send the datagram to the remote endpoint, refreshing
-  /// the last-send time for the heartbeat idle check. Data commands
-  /// sent while the handshake is still in progress are deferred to
-  /// [_pendingPackets] (bounded by [Config.maxPendingPackets]).
+  @override
   bool sendPacket(Magpie packet, {
     bool encryptedMode = true,
   }) {
@@ -250,10 +241,9 @@ abstract class BaseLink implements MagLink {
       // waiting for handshake (bounded: keep the newest packets)
       if (_pendingPackets.length >= config.maxPendingPackets) {
         // queue full: drop the oldest and notify the app
-        final delegate = sharedMagpieExtensions.delegate;
         final dropped = _pendingPackets.removeAt(0);
         final pipe = getPipe(dropped.target);
-        delegate?.onPacketFailed(dropped, pipe, this);
+        delegate.onPacketFailed(dropped, pipe, this);
       }
       _pendingPackets.add(packet);
     }
@@ -271,6 +261,8 @@ abstract class BaseLink implements MagLink {
     processPacket(packet);
   }
 
+  /// Parse the raw bytes into a packet: null for malformed datagrams
+  /// (the link then stays silent - no delegate notification).
   Packet? parse(Uint8List data);
 
   /// Dispatch a received packet: the pipe answers PONG/COPY first, then
@@ -283,8 +275,7 @@ abstract class BaseLink implements MagLink {
     final pipe = getPipe(packet.source);
     pipe?.processPacket(packet);
     // 2. call app to process the payload
-    final delegate = sharedMagpieExtensions.delegate;
-    delegate?.onPacketReceived(packet, pipe, this);
+    delegate.onPacketReceived(packet, pipe, this);
   }
 
 }

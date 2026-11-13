@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 
+import 'package:magpipe/src/base.dart';
 import 'package:magpipe/src/bridge.dart';
 import 'package:magpipe/src/utils/config.dart';
 import 'package:magpipe/src/utils/hmac.dart';
@@ -29,14 +30,24 @@ Future<Datagram?> receive(RawDatagramSocket s, Duration timeout) async {
   return null;
 }
 
+/// no-op delegate: satisfies the link's observer contract
+class _NoopDelegate implements MagpieDelegate {
+  @override
+  void onPacketReceived(Packet packet, MagPipe? pipe, MagLink link) {}
+  @override
+  void onPacketSent(Magpie packet, MagPipe? pipe, MagLink link) {}
+  @override
+  void onPacketFailed(Magpie packet, MagPipe? pipe, MagLink link) {}
+}
+
 Future<void> main() async {
   registerHmacSha256();
 
   // fake server + client on loopback
   final server = await RawDatagramSocket.bind('127.0.0.1', 0);
   final client = await RawDatagramSocket.bind('127.0.0.1', 0);
-  final conn = BridgeLink(client, (host: server.address, port: server.port),
-      enigma: Enigma(), config: Config());
+  var factory = BridgeFactory(Enigma(), Config(), _NoopDelegate());
+  final conn = factory.createLink(client, (host: server.address, port: server.port));
   Datagram? dg;
 
   // 0a: connect() -> SYN? sent
@@ -84,8 +95,7 @@ Future<void> main() async {
   check(dg == null, 'B: recent traffic -> no PING');
 
   // C: fresh connection (no timestamps) -> no ping
-  var fresh = BridgeLink(client, (host: server.address, port: server.port),
-      enigma: Enigma(), config: Config());
+  var fresh = factory.createLink(client, (host: server.address, port: server.port));
   if (fresh.needsHeartbeat()) fresh.heartbeat();
   dg = await receive(server, const Duration(milliseconds: 300));
   check(dg == null, 'C: no traffic yet -> no PING');
